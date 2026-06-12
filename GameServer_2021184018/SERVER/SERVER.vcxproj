@@ -130,9 +130,6 @@
     <ClCompile Include="GameServer.cpp" />
     <ClCompile Include="network.cpp" />
     <ClCompile Include="npc.cpp" />
-    <ClCompile Include="npc_sector.cpp">
-      <ExcludedFromBuild>true</ExcludedFromBuild>
-    </ClCompile>
     <ClCompile Include="session.cpp" />
   </ItemGroup>
   <ItemGroup>
