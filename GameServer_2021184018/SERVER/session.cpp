@@ -228,9 +228,9 @@ bool SESSION::process_packet(unsigned char* p)
             broadcast_damage(m_x, m_y, m_id, obj_id, dmg, rem);
 
             if (rem <= 0) {
-                // EXP 계산: 레벨^2 * 2, Agro 2배
+                // EXP 계산: 레벨^2 * 2, Agro=2배(로밍), Peace=1배(고정)
                 int xp_gain = npc->m_level * npc->m_level * 2;
-                if (npc->m_npc_type == NPC_AGRO_TYPE) xp_gain *= 2;
+                if (npc->m_npc_type == NPC_AGRO_TYPE) xp_gain *= 2; // Agro = 로밍 2배
 
                 npc_die(obj_id, npc);
 
@@ -249,10 +249,10 @@ bool SESSION::process_packet(unsigned char* p)
                                m_level, m_xp, exp_for_next_level());
             }
             else {
-                if (npc->m_npc_type == NPC_AGRO_TYPE) {
-                    npc->m_target_id = m_id;
-                    npc->wake_up();
-                }
+                // 피격 시 모든 NPC 타입이 CHASE로 전환 (Peace도 반격 추적)
+                npc->m_target_id  = m_id;
+                npc->m_move_state = NPC_CHASE;
+                npc->wake_up();
             }
         }
         break;

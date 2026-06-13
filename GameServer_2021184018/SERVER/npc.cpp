@@ -42,21 +42,37 @@ void CNPC::update_viewers(short old_x, short old_y)
     }
 }
 
-void CNPC::do_peace_move()
+void CNPC::do_roaming_move()
 {
     short old_x = m_x, old_y = m_y;
+    constexpr int ROAM_RANGE = 20;
 
+    short nx = m_x, ny = m_y;
     switch (rand() % 4) {
-    case 0: if (m_y > 0)               --m_y; break;
-    case 1: if (m_y < WORLD_HEIGHT - 1) ++m_y; break;
-    case 2: if (m_x > 0)               --m_x; break;
-    case 3: if (m_x < WORLD_WIDTH - 1)  ++m_x; break;
+    case 0: ny = m_y - 1; break;
+    case 1: ny = m_y + 1; break;
+    case 2: nx = m_x - 1; break;
+    case 3: nx = m_x + 1; break;
+    }
+
+    nx = static_cast<short>(std::max(0, std::min((int)nx, WORLD_WIDTH  - 1)));
+    ny = static_cast<short>(std::max(0, std::min((int)ny, WORLD_HEIGHT - 1)));
+
+    if (std::abs(nx - m_origin_x) <= ROAM_RANGE &&
+        std::abs(ny - m_origin_y) <= ROAM_RANGE) {
+        m_x = nx;
+        m_y = ny;
+    } else {
+        if      (m_x < m_origin_x) ++m_x;
+        else if (m_x > m_origin_x) --m_x;
+        else if (m_y < m_origin_y) ++m_y;
+        else if (m_y > m_origin_y) --m_y;
     }
 
     update_viewers(old_x, old_y);
 }
 
-void CNPC::do_agro_move()
+void CNPC::do_chase_move()
 {
     // 타겟 유효성 확인
     if (m_target_id != -1) {
@@ -71,8 +87,8 @@ void CNPC::do_agro_move()
         }
     }
 
-    // 타겟 없으면 주변 탐색
-    if (m_target_id == -1) {
+    // Agro만 주변 스캔으로 새 타겟 탐색, Peace는 공격받은 대상만 추적
+    if (m_target_id == -1 && m_npc_type == NPC_AGRO_TYPE) {
         int min_dist = INT_MAX;
         for (int id : sector_manager.get_objects_in_adjacent_sectors(m_x, m_y)) {
             if (!is_pc(id)) continue;
@@ -88,10 +104,23 @@ void CNPC::do_agro_move()
         }
     }
 
-    if (m_target_id == -1) { do_peace_move(); return; }
+    // 타겟 없음 → 원래 상태로 복귀
+    if (m_target_id == -1) {
+        if (m_npc_type == NPC_AGRO_TYPE) {
+            m_move_state = NPC_ROAMING;
+            do_roaming_move();
+        } else {
+            m_move_state = NPC_IDLE;
+        }
+        return;
+    }
 
     auto tobj = get_object(m_target_id);
-    if (!tobj) { m_target_id = -1; do_peace_move(); return; }
+    if (!tobj) {
+        m_target_id = -1;
+        m_move_state = (m_npc_type == NPC_AGRO_TYPE) ? NPC_ROAMING : NPC_IDLE;
+        return;
+    }
 
     short tx = tobj->m_x, ty = tobj->m_y;
     int dx = std::abs(m_x - tx);
@@ -113,7 +142,6 @@ void CNPC::do_agro_move()
         }
 
         if (remaining <= 0) {
-            // 플레이어 사망: EXP 반감 + 스폰 위치
             player->m_xp = player->m_xp / 2;
             player->m_hp = player->m_max_hp;
             short old_px = player->m_x, old_py = player->m_y;
@@ -127,6 +155,7 @@ void CNPC::do_agro_move()
                                    player->exp_for_next_level());
             update_player_view(m_target_id);
             m_target_id = -1;
+            m_move_state = (m_npc_type == NPC_AGRO_TYPE) ? NPC_ROAMING : NPC_IDLE;
         } else {
             player->send_stat_info(m_target_id, remaining, player->m_max_hp,
                                    player->m_level, player->m_xp,
@@ -167,12 +196,13 @@ void process_npc_move(int npc_id)
     if (!obj || obj->m_id < NPC_ID_START || obj->m_state != CS_PLAYING) return;
 
     CNPC* npc = to_npc(obj);
-    if (npc->m_hp <= 0) return; // 사망 대기 중
+    if (npc->m_hp <= 0) return;
 
-    if (npc->m_npc_type == NPC_AGRO_TYPE)
-        npc->do_agro_move();
-    else
-        npc->do_peace_move();
+    switch (npc->m_move_state) {
+    case NPC_IDLE:    return;
+    case NPC_ROAMING: npc->do_roaming_move(); break;
+    case NPC_CHASE:   npc->do_chase_move();   break;
+    }
 
     bool has_nearby = false;
     int cooltime = MOVE_COOL_TIME;
@@ -211,10 +241,13 @@ void process_npc_respawn(int npc_id)
     if (!obj || !is_npc(npc_id)) return;
 
     CNPC* npc    = to_npc(obj);
-    npc->m_hp    = npc->m_max_hp;
-    npc->m_target_id = -1;
-    npc->m_x     = static_cast<short>(rand() % WORLD_WIDTH);
-    npc->m_y     = static_cast<short>(rand() % WORLD_HEIGHT);
+    npc->m_hp         = npc->m_max_hp;
+    npc->m_target_id  = -1;
+    npc->m_move_state = (npc->m_npc_type == NPC_AGRO_TYPE) ? NPC_ROAMING : NPC_IDLE;
+    npc->m_x          = static_cast<short>(rand() % WORLD_WIDTH);
+    npc->m_y          = static_cast<short>(rand() % WORLD_HEIGHT);
+    npc->m_origin_x   = npc->m_x;
+    npc->m_origin_y   = npc->m_y;
     sector_manager.add_object_to_sector(npc_id, npc->m_x, npc->m_y);
     // wake_up은 플레이어가 근처에 왔을 때 자동으로 호출됨
 }
@@ -227,15 +260,19 @@ void InitializeNPC()
         npc->m_id = i;
         npc->m_x  = static_cast<short>(rand() % WORLD_WIDTH);
         npc->m_y  = static_cast<short>(rand() % WORLD_HEIGHT);
+        npc->m_origin_x = npc->m_x;
+        npc->m_origin_y = npc->m_y;
         sprintf_s(npc->m_username, "NPC%d", i - NPC_ID_START);
 
         if ((i % 2) == 0) {
-            npc->m_npc_type = NPC_PEACE_TYPE;
-            npc->m_level    = NPC_PEACE_LEVEL;
+            npc->m_npc_type  = NPC_PEACE_TYPE;
+            npc->m_move_state = NPC_IDLE;
+            npc->m_level     = NPC_PEACE_LEVEL;
             npc->m_hp = npc->m_max_hp = NPC_PEACE_MAX_HP;
         } else {
-            npc->m_npc_type = NPC_AGRO_TYPE;
-            npc->m_level    = NPC_AGRO_LEVEL;
+            npc->m_npc_type  = NPC_AGRO_TYPE;
+            npc->m_move_state = NPC_ROAMING;
+            npc->m_level     = NPC_AGRO_LEVEL;
             npc->m_hp = npc->m_max_hp = NPC_AGRO_MAX_HP;
         }
 
