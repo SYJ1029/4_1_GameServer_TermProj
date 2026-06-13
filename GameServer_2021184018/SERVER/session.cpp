@@ -178,6 +178,7 @@ bool SESSION::process_packet(unsigned char* p)
             // 스트레스 테스트 봇: DB 스킵, 기본값으로 즉시 게임 진입
             m_state = CS_PLAYING;
             sector_manager.add_object_to_sector(m_id, m_x, m_y);
+            send_login_success();
             send_avatar_info();
             update_player_view(m_id);
             event_type regen_ev;

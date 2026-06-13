@@ -11,9 +11,14 @@ static void db_error(SQLSMALLINT handle_type, SQLHANDLE handle)
     SQLINTEGER  native;
     SQLWCHAR    state[SQL_SQLSTATE_SIZE + 1];
     SQLWCHAR    msg[1000];
+    char        state_n[SQL_SQLSTATE_SIZE + 1];
+    char        msg_n[1000];
     while (SQLGetDiagRecW(handle_type, handle, ++rec, state, &native,
-                          msg, 1000, NULL) == SQL_SUCCESS)
-        std::wcerr << L"[DB] [" << state << L"] " << msg << L"\n";
+                          msg, 1000, NULL) == SQL_SUCCESS) {
+        wcstombs_s(nullptr, state_n, state, SQL_SQLSTATE_SIZE);
+        wcstombs_s(nullptr, msg_n,   msg,   999);
+        std::cerr << "[DB] [" << state_n << "] " << msg_n << "\n";
+    }
 }
 
 static bool sql_ok(SQLRETURN r)
@@ -31,14 +36,9 @@ static bool connect_db(SQLHENV& henv, SQLHDBC& hdbc)
         return false;
     SQLSetConnectAttr(hdbc, SQL_LOGIN_TIMEOUT, (SQLPOINTER)5, 0);
 
-    SQLWCHAR conn[] =
-        L"Driver={ODBC Driver 17 for SQL Server};"
-        L"Server=(localdb)\\MSSQLLocalDB;"
-        L"Database=2021184018_TermProjServer;"
-        L"Trusted_Connection=yes;";
-    SQLSMALLINT out_len;
-    SQLRETURN ret = SQLDriverConnectW(hdbc, NULL, conn, SQL_NTS,
-                                      NULL, 0, &out_len, SQL_DRIVER_NOPROMPT);
+    SQLRETURN ret = SQLConnectW(hdbc,
+        (SQLWCHAR*)L"SYJ_TERM_2021184018", SQL_NTS,
+        NULL, 0, NULL, 0);
     if (!sql_ok(ret)) {
         db_error(SQL_HANDLE_DBC, hdbc);
         return false;

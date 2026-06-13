@@ -162,6 +162,10 @@ static void handle_packet(unsigned char* p)
             g_state = AppState::PLAYING;
         } else {
             push_msg(std::string("Login failed: ") + pkt->message);
+            g_running = false;
+            closesocket(g_sock);
+            g_sock  = INVALID_SOCKET;
+            g_state = AppState::LOGIN;
         }
         break;
     }
@@ -402,7 +406,8 @@ static void draw_login(sf::RenderWindow& win, sf::Font& font)
     draw_field("Server IP :", g_input_ip,   240.f, g_focus == 0);
     draw_field("Username  :", g_input_name, 285.f, g_focus == 1);
 
-    sf::Text hint("[Tab] 필드 전환    [Enter] 접속", font, 13);
+    std::string hint_str = "[Tab] switch field    [Enter] connect";
+    sf::Text hint(hint_str, font, 13);
     hint.setFillColor(sf::Color(90, 90, 100));
     hint.setPosition(WIN_W / 2.f - hint.getLocalBounds().width / 2.f, 340.f);
     win.draw(hint);
@@ -690,7 +695,7 @@ int main()
                 if (event.type == sf::Event::KeyPressed &&
                     event.key.code == sf::Keyboard::Enter) {
                     if (!g_input_name.empty() && !do_connect(g_input_ip, g_input_name))
-                        push_msg("서버 연결 실패.");
+                        push_msg("Connection failed.");
                 }
             }
             else  // PLAYING

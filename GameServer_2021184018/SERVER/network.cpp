@@ -3,16 +3,12 @@
 
 void error_display(const wchar_t* msg, int err_no)
 {
-	WCHAR* lpMsgBuf;
-	FormatMessage(
-		FORMAT_MESSAGE_ALLOCATE_BUFFER |
-		FORMAT_MESSAGE_FROM_SYSTEM,
-		NULL, err_no,
-		MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-		(LPTSTR)&lpMsgBuf, 0, NULL);
-	std::wcout << msg;
-	std::wcout << L" === error " << lpMsgBuf << std::endl;
-	LocalFree(lpMsgBuf);
+	char buf[512];
+	FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+		NULL, err_no, 0, buf, sizeof(buf), NULL);
+	char narrow[256] = {};
+	wcstombs_s(nullptr, narrow, msg, sizeof(narrow) - 1);
+	std::cout << narrow << " === error " << buf;
 }
 
 bool is_pc(int id)  { return id < NPC_ID_START; }
@@ -170,7 +166,6 @@ void worker_thread()
 				CreateIoCompletionPort((HANDLE)exp_over->m_client_socket, g_iocp, my_id, 0);
 				std::shared_ptr<SESSION> new_pl = std::make_shared<SESSION>(exp_over->m_client_socket, my_id);
 				clients[my_id] = new_pl;
-				new_pl->send_login_success();
 				new_pl->do_recv();
 			}
 
@@ -250,6 +245,7 @@ void worker_thread()
 			cl->m_xp    = exp_over->m_db_result.exp;
 			cl->m_state = CS_PLAYING;
 			sector_manager.add_object_to_sector(key, cl->m_x, cl->m_y);
+			cl->send_login_success();
 			cl->send_avatar_info();
 			update_player_view(key);
 			event_type ev;
