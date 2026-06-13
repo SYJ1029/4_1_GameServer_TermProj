@@ -29,6 +29,7 @@ int get_new_player_id();
 void process_npc_move(int npc_id);
 void process_npc_respawn(int npc_id);
 void process_hp_regen(int player_id);
+void broadcast_npc_state(int npc_id, CNPC* npc);
 void worker_thread();
 void timer_thread();
 void InitializeNPC();

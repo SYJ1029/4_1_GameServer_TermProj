@@ -27,7 +27,8 @@ struct ObjInfo {
     char          name[MAX_NAME_LEN];
     short         x, y;
     short         hp, max_hp;
-    NPC_KIND      npc_type;  // NPC_PC=0, NPC_PEACE=1, NPC_AGRO=2
+    NPC_KIND      npc_type;   // NPC_PC=0, NPC_PEACE=1, NPC_AGRO=2
+    NPC_STATE     npc_state;  // NPC_STATE_IDLE/ROAMING/CHASE
 };
 
 // ── 전역 상태 ─────────────────────────────────────────────────────
@@ -157,12 +158,13 @@ static void handle_packet(unsigned char* p)
     {
         auto* pkt = reinterpret_cast<S2C_AddPlayer*>(p);
         ObjInfo o{};
-        o.id       = pkt->playerId;
-        o.x        = pkt->x;
-        o.y        = pkt->y;
-        o.hp       = pkt->hp;
-        o.max_hp   = pkt->max_hp;
-        o.npc_type = pkt->npc_type;
+        o.id        = pkt->playerId;
+        o.x         = pkt->x;
+        o.y         = pkt->y;
+        o.hp        = pkt->hp;
+        o.max_hp    = pkt->max_hp;
+        o.npc_type  = pkt->npc_type;
+        o.npc_state = pkt->npc_state;
         strncpy_s(o.name, pkt->username, MAX_NAME_LEN - 1);
         std::lock_guard<std::mutex> lk(g_objs_lock);
         g_objs[o.id] = o;
@@ -214,8 +216,9 @@ static void handle_packet(unsigned char* p)
             std::lock_guard<std::mutex> lk(g_objs_lock);
             auto it = g_objs.find(pkt->object_id);
             if (it != g_objs.end()) {
-                it->second.hp     = pkt->hp;
-                it->second.max_hp = pkt->max_hp;
+                it->second.hp        = pkt->hp;
+                it->second.max_hp    = pkt->max_hp;
+                it->second.npc_state = pkt->npc_state;
             }
         }
         break;
@@ -431,9 +434,15 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
     sf::RectangleShape obj_rect(sf::Vector2f(0.84f, 0.84f));
     for (auto& s : snaps) {
         sf::Color c;
-        if      (s.info.npc_type == NPC_AGRO)  c = sf::Color(220, 60, 60);
-        else if (s.info.npc_type == NPC_PEACE) c = sf::Color(180, 100, 40);
-        else                                    c = sf::Color(55, 185, 80);
+        if (s.info.npc_type == NPC_PC) {
+            c = sf::Color(55, 185, 80);
+        } else if (s.info.npc_state == NPC_STATE_CHASE) {
+            c = sf::Color(255, 40, 40);   // 추격 중 — 밝은 빨강 (타입 무관)
+        } else if (s.info.npc_type == NPC_AGRO) {
+            c = sf::Color(200, 100, 30);  // Agro 로밍 — 주황
+        } else {
+            c = sf::Color(120, 140, 90);  // Peace 대기 — 올리브
+        }
         obj_rect.setFillColor(c);
         obj_rect.setPosition(s.info.x + 0.08f, s.info.y + 0.08f);
         win.draw(obj_rect);
@@ -457,9 +466,16 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
             sf::Vector2f(s.info.x + 0.5f, s.info.y + 0.5f), game_view);
         if (sp.x < 0 || sp.x > WIN_W || sp.y < 0 || sp.y > WIN_H - UI_H) continue;
 
-        sf::Color tc = (s.info.npc_type == NPC_AGRO)  ? sf::Color(255, 130, 130) :
-                       (s.info.npc_type == NPC_PEACE) ? sf::Color(210, 160, 90) :
-                                                         sf::Color(140, 230, 140);
+        sf::Color tc;
+        if (s.info.npc_type == NPC_PC) {
+            tc = sf::Color(140, 230, 140);
+        } else if (s.info.npc_state == NPC_STATE_CHASE) {
+            tc = sf::Color(255, 80, 80);
+        } else if (s.info.npc_type == NPC_AGRO) {
+            tc = sf::Color(240, 170, 80);
+        } else {
+            tc = sf::Color(180, 200, 140);
+        }
         lbl.setString(s.info.name);
         draw_text_shadowed(win, lbl,
             sf::Vector2f(sp.x - lbl.getLocalBounds().width / 2.f, (float)sp.y - 14.f), tc);

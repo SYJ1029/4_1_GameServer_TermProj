@@ -19,7 +19,10 @@ enum PACKET_TYPE {
 enum DIRECTION { UP, DOWN, LEFT, RIGHT };
 
 // NPC 타입 (클라이언트/프로토콜용)
-enum NPC_KIND : unsigned char { NPC_PC = 0, NPC_PEACE = 1, NPC_AGRO = 2 };
+enum NPC_KIND  : unsigned char { NPC_PC = 0, NPC_PEACE = 1, NPC_AGRO = 2 };
+
+// NPC 이동 상태 (서버 내부 + 프로토콜 공유)
+enum NPC_STATE : unsigned char { NPC_STATE_IDLE = 0, NPC_STATE_ROAMING = 1, NPC_STATE_CHASE = 2 };
 
 #pragma pack(push, 1)
 
@@ -78,7 +81,8 @@ struct S2C_AddPlayer {
     short         y;
     short         hp;
     short         max_hp;
-    NPC_KIND      npc_type;   // 0=player, 1=peace, 2=agro
+    NPC_KIND      npc_type;    // 0=player, 1=peace, 2=agro
+    NPC_STATE     npc_state;   // IDLE/ROAMING/CHASE
 };
 
 struct S2C_RemovePlayer {
@@ -110,9 +114,10 @@ struct S2C_StatInfo {
     int           object_id;
     short         hp;
     short         max_hp;
-    int           level;    // NPC는 0
-    int           exp;      // NPC는 0
-    int           exp_next; // NPC는 0
+    int           level;      // NPC는 0
+    int           exp;        // NPC는 0
+    int           exp_next;   // NPC는 0
+    NPC_STATE     npc_state;  // 플레이어는 NPC_STATE_IDLE
 };
 
 struct S2C_DamageInfo {

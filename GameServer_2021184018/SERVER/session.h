@@ -91,7 +91,7 @@ public:
     void send_remove_object(int object_id);
     void send_move_object(int object_id);
     void send_chat(int sender_id, const char* sender_name, const char* msg);
-    void send_stat_info(int object_id, short hp, short max_hp, int level = 0, int exp = 0, int exp_next = 0);
+    void send_stat_info(int object_id, short hp, short max_hp, int level = 0, int exp = 0, int exp_next = 0, NPC_STATE npc_state = NPC_STATE_IDLE);
     void send_damage_info(int attacker_id, int target_id, short damage, short target_hp);
 
     bool process_packet(unsigned char* p);

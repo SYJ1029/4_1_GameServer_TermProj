@@ -23,9 +23,14 @@ void SESSION::send_add_object(int object_id)
     packet.y        = obj->m_y;
     packet.hp       = obj->m_hp;
     packet.max_hp   = obj->m_max_hp;
-    packet.npc_type = is_npc(object_id)
-        ? (NPC_KIND)to_npc(obj)->m_npc_type
-        : NPC_PC;
+    if (is_npc(object_id)) {
+        CNPC* npc       = to_npc(obj);
+        packet.npc_type  = (NPC_KIND)npc->m_npc_type;
+        packet.npc_state = npc->m_move_state;
+    } else {
+        packet.npc_type  = NPC_PC;
+        packet.npc_state = NPC_STATE_IDLE;
+    }
     do_send(packet.size, reinterpret_cast<char*>(&packet));
 }
 
@@ -78,7 +83,7 @@ void SESSION::send_chat(int sender_id, const char* sender_name, const char* msg)
 }
 
 void SESSION::send_stat_info(int object_id, short hp, short max_hp,
-                              int level, int exp, int exp_next)
+                              int level, int exp, int exp_next, NPC_STATE npc_state)
 {
     if (!can_send()) return;
 
@@ -91,6 +96,7 @@ void SESSION::send_stat_info(int object_id, short hp, short max_hp,
     packet.level     = level;
     packet.exp       = exp;
     packet.exp_next  = exp_next;
+    packet.npc_state = npc_state;
     do_send(packet.size, reinterpret_cast<char*>(&packet));
 }
 
@@ -251,7 +257,8 @@ bool SESSION::process_packet(unsigned char* p)
             else {
                 // 피격 시 모든 NPC 타입이 CHASE로 전환 (Peace도 반격 추적)
                 npc->m_target_id  = m_id;
-                npc->m_move_state = NPC_CHASE;
+                npc->m_move_state = NPC_STATE_CHASE;
+                broadcast_npc_state(obj_id, npc);
                 npc->wake_up();
             }
         }
