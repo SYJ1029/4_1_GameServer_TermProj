@@ -1,11 +1,9 @@
 // SIMPLEST MMORPG - Client
 // Graphics : SFML 2.x  (NuGet: SFML by SFML Team)
 // Network  : Winsock2  (raw, same as server)
-//
-// SFML setup: Project > Manage NuGet Packages > install "SFML"
-// Linker    : sfml-graphics, sfml-window, sfml-system, sfml-main, ws2_32
 
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
@@ -23,19 +21,24 @@
 
 #include "../../COMMON/PROTOCOL/protocol_2026.h"
 
-// ── 오브젝트 ──────────────────────────────────────────────────
+// ── 오브젝트 ──────────────────────────────────────────────────────
 struct ObjInfo {
-    int   id;
-    char  name[MAX_NAME_LEN];
-    short x, y;
-    bool  is_npc;
+    int           id;
+    char          name[MAX_NAME_LEN];
+    short         x, y;
+    short         hp, max_hp;
+    NPC_KIND      npc_type;  // NPC_PC=0, NPC_PEACE=1, NPC_AGRO=2
 };
 
-// ── 전역 게임 상태 ────────────────────────────────────────────
-static SOCKET            g_sock      = INVALID_SOCKET;
-static std::atomic<bool> g_running   { false };
-static int               g_my_id     = -1;
-static short             g_my_x      = 0, g_my_y = 0;
+// ── 전역 상태 ─────────────────────────────────────────────────────
+static SOCKET            g_sock     = INVALID_SOCKET;
+static std::atomic<bool> g_running  { false };
+static int               g_my_id    = -1;
+static short             g_my_x     = 0, g_my_y = 0;
+static short             g_my_hp    = 100, g_my_max_hp = 100;
+static int               g_my_level  = 1;
+static int               g_my_xp     = 0;
+static int               g_my_exp_next = 100;
 static int               g_move_time = 0;
 
 static std::unordered_map<int, ObjInfo> g_objs;
@@ -43,34 +46,38 @@ static std::mutex g_objs_lock;
 
 static std::deque<std::string> g_msgs;
 static std::mutex              g_msgs_lock;
-constexpr int MAX_MSGS = 5;
+constexpr int MAX_MSGS    = 6;
+constexpr int MSG_LINE_H  = 15;   // 메시지 한 줄 높이 (px)
 
-// ── 앱 상태 ───────────────────────────────────────────────────
+// ── 채팅 상태 ─────────────────────────────────────────────────────
+static bool        g_chat_mode  = false;
+static std::string g_chat_input;
+
+// ── 앱 상태 ───────────────────────────────────────────────────────
 enum class AppState { LOGIN, PLAYING };
 static AppState    g_state      = AppState::LOGIN;
 static std::string g_input_ip   = "127.0.0.1";
 static std::string g_input_name;
-static int         g_focus      = 1;   // 0=IP, 1=name
+static int         g_focus      = 1;  // 0=IP, 1=name
 
-// ── 렌더 상수 ─────────────────────────────────────────────────
-constexpr int   VSIZE    = 15;         // 시야 15x15 타일
-constexpr int   TILE_PX  = 36;         // 타일당 픽셀 (정수)
-constexpr float TILE_F   = 36.f;       // 타일당 픽셀 (SFML용 float)
-constexpr int   WIN_W    = VSIZE * TILE_PX;   // 540
-constexpr int   UI_H     = 120;
-constexpr int   WIN_H    = WIN_W + UI_H;       // 660
-constexpr float GAME_VP_H = (float)(WIN_H - UI_H) / WIN_H;  // 뷰포트 비율
+// ── 렌더 상수 ─────────────────────────────────────────────────────
+constexpr int   VSIZE   = 15;
+constexpr int   TILE_PX = 36;
+constexpr float TILE_F  = 36.f;
+constexpr int   WIN_W   = VSIZE * TILE_PX;   // 540
+constexpr int   UI_H    = 170;               // HP바(17) + 힌트(17) + 메시지 6줄(90) + 채팅창(26) + 여유
+constexpr int   WIN_H   = WIN_W + UI_H;       // 710
+constexpr float GAME_VP_H = (float)(WIN_H - UI_H) / WIN_H;
 
-// ── 유틸 ──────────────────────────────────────────────────────
+// ── 유틸 ──────────────────────────────────────────────────────────
 static void push_msg(const std::string& s)
 {
     std::lock_guard<std::mutex> lk(g_msgs_lock);
     g_msgs.push_back(s);
-    if ((int)g_msgs.size() > MAX_MSGS)
-        g_msgs.pop_front();
+    if ((int)g_msgs.size() > MAX_MSGS) g_msgs.pop_front();
 }
 
-// ── 패킷 송신 ─────────────────────────────────────────────────
+// ── 패킷 송신 ─────────────────────────────────────────────────────
 static void net_send(void* data, int sz)
 {
     if (g_sock != INVALID_SOCKET)
@@ -96,7 +103,27 @@ static void send_move(DIRECTION dir)
     net_send(&p, p.size);
 }
 
-// ── 패킷 처리 ─────────────────────────────────────────────────
+static void send_attack()
+{
+    C2S_Attack p{};
+    p.size = sizeof(p);
+    p.type = C2S_ATTACK;
+    net_send(&p, p.size);
+}
+
+static void send_chat(const std::string& msg)
+{
+    if (msg.empty()) return;
+    C2S_Chat p{};
+    p.size = sizeof(p);
+    p.type = C2S_CHAT;
+    strncpy_s(p.msg, msg.c_str(), MAX_CHAT_LEN - 1);
+    net_send(&p, p.size);
+}
+
+// ── 패킷 처리 ─────────────────────────────────────────────────────
+static char s_login_name[MAX_NAME_LEN];
+
 static void handle_packet(unsigned char* p)
 {
     PACKET_TYPE type = *reinterpret_cast<PACKET_TYPE*>(&p[1]);
@@ -116,19 +143,26 @@ static void handle_packet(unsigned char* p)
     case S2C_AVATAR_INFO:
     {
         auto* pkt = reinterpret_cast<S2C_AvatarInfo*>(p);
-        g_my_id = pkt->playerId;
-        g_my_x  = pkt->x;
-        g_my_y  = pkt->y;
+        g_my_id       = pkt->playerId;
+        g_my_x        = pkt->x;
+        g_my_y        = pkt->y;
+        g_my_hp       = pkt->hp;
+        g_my_max_hp   = pkt->max_hp;
+        g_my_level    = pkt->level;
+        g_my_xp       = pkt->exp;
+        g_my_exp_next = pkt->exp_next;
         break;
     }
     case S2C_ADD_PLAYER:
     {
         auto* pkt = reinterpret_cast<S2C_AddPlayer*>(p);
         ObjInfo o{};
-        o.id     = pkt->playerId;
-        o.x      = pkt->x;
-        o.y      = pkt->y;
-        o.is_npc = (pkt->playerId >= NPC_ID_START);
+        o.id       = pkt->playerId;
+        o.x        = pkt->x;
+        o.y        = pkt->y;
+        o.hp       = pkt->hp;
+        o.max_hp   = pkt->max_hp;
+        o.npc_type = pkt->npc_type;
         strncpy_s(o.name, pkt->username, MAX_NAME_LEN - 1);
         std::lock_guard<std::mutex> lk(g_objs_lock);
         g_objs[o.id] = o;
@@ -157,12 +191,73 @@ static void handle_packet(unsigned char* p)
         }
         break;
     }
+    case S2C_CHAT:
+    {
+        auto* pkt = reinterpret_cast<S2C_Chat*>(p);
+        pkt->sender_name[MAX_NAME_LEN - 1] = 0;
+        pkt->msg[MAX_CHAT_LEN - 1]         = 0;
+        push_msg(std::string("[") + pkt->sender_name + "] " + pkt->msg);
+        break;
+    }
+    case S2C_STAT_INFO:
+    {
+        auto* pkt = reinterpret_cast<S2C_StatInfo*>(p);
+        if (pkt->object_id == g_my_id) {
+            g_my_hp       = pkt->hp;
+            g_my_max_hp   = pkt->max_hp;
+            if (pkt->level > 0) {
+                g_my_level    = pkt->level;
+                g_my_xp       = pkt->exp;
+                g_my_exp_next = pkt->exp_next;
+            }
+        } else {
+            std::lock_guard<std::mutex> lk(g_objs_lock);
+            auto it = g_objs.find(pkt->object_id);
+            if (it != g_objs.end()) {
+                it->second.hp     = pkt->hp;
+                it->second.max_hp = pkt->max_hp;
+            }
+        }
+        break;
+    }
+    case S2C_DAMAGE_INFO:
+    {
+        auto* pkt = reinterpret_cast<S2C_DamageInfo*>(p);
+
+        // g_objs에서 대상 HP 갱신
+        {
+            std::lock_guard<std::mutex> lk(g_objs_lock);
+            auto it = g_objs.find(pkt->target_id);
+            if (it != g_objs.end()) it->second.hp = pkt->target_hp;
+        }
+
+        // 전투 메시지 생성
+        bool atk_is_me  = (pkt->attacker_id == g_my_id);
+        bool tgt_is_me  = (pkt->target_id   == g_my_id);
+        bool atk_is_npc = (pkt->attacker_id >= NPC_ID_START);
+        bool tgt_is_npc = (pkt->target_id   >= NPC_ID_START);
+
+        char buf[128];
+        if (atk_is_me)
+            sprintf_s(buf, "You hit NPC(%d) for %d! HP:%d",
+                pkt->target_id - NPC_ID_START, pkt->damage, pkt->target_hp);
+        else if (tgt_is_me)
+            sprintf_s(buf, "NPC(%d) hit You for %d! HP:%d/%d",
+                pkt->attacker_id - NPC_ID_START, pkt->damage, pkt->target_hp, g_my_max_hp);
+        else if (atk_is_npc && !tgt_is_npc)
+            sprintf_s(buf, "NPC hit PC#%d for %d (HP:%d)",
+                pkt->target_id, pkt->damage, pkt->target_hp);
+        else
+            sprintf_s(buf, "PC#%d hit NPC(%d) for %d (HP:%d)",
+                pkt->attacker_id, pkt->target_id - NPC_ID_START, pkt->damage, pkt->target_hp);
+
+        push_msg(buf);
+        break;
+    }
     }
 }
 
-// ── 수신 스레드 ───────────────────────────────────────────────
-static char s_login_name[MAX_NAME_LEN];
-
+// ── 수신 스레드 ───────────────────────────────────────────────────
 static void recv_thread_fn()
 {
     send_login(s_login_name);
@@ -188,7 +283,7 @@ static void recv_thread_fn()
     }
 }
 
-// ── 서버 연결 ─────────────────────────────────────────────────
+// ── 서버 연결 ─────────────────────────────────────────────────────
 static bool do_connect(const std::string& ip, const std::string& name)
 {
     g_sock = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -210,11 +305,11 @@ static bool do_connect(const std::string& ip, const std::string& name)
     return true;
 }
 
-// ── 텍스트 그림자 helper ──────────────────────────────────────
+// ── 텍스트 그림자 ──────────────────────────────────────────────────
 static void draw_text_shadowed(sf::RenderWindow& win, sf::Text& text,
                                 sf::Vector2f pos, sf::Color color)
 {
-    text.setFillColor(sf::Color(0, 0, 0, 160));
+    text.setFillColor(sf::Color(0, 0, 0, 180));
     text.setPosition(pos + sf::Vector2f(1.f, 1.f));
     win.draw(text);
     text.setFillColor(color);
@@ -222,7 +317,30 @@ static void draw_text_shadowed(sf::RenderWindow& win, sf::Text& text,
     win.draw(text);
 }
 
-// ── 로그인 화면 ───────────────────────────────────────────────
+// HP 바 (월드 좌표계)
+static void draw_hp_bar(sf::RenderWindow& win, float wx, float wy,
+                         short hp, short max_hp)
+{
+    if (max_hp <= 0) return;
+    constexpr float W = 0.8f, H = 0.08f;
+    float ratio = std::max(0.f, (float)hp / max_hp);
+
+    sf::RectangleShape bg({ W, H });
+    bg.setFillColor(sf::Color(80, 0, 0));
+    bg.setPosition(wx + 0.1f, wy - 0.18f);
+    win.draw(bg);
+
+    if (ratio > 0.f) {
+        sf::RectangleShape bar({ W * ratio, H });
+        bar.setFillColor(ratio > 0.5f ? sf::Color(0, 200, 50)
+                        : ratio > 0.25f ? sf::Color(220, 180, 0)
+                        : sf::Color(220, 40, 40));
+        bar.setPosition(wx + 0.1f, wy - 0.18f);
+        win.draw(bar);
+    }
+}
+
+// ── 로그인 화면 ───────────────────────────────────────────────────
 static void draw_login(sf::RenderWindow& win, sf::Font& font)
 {
     win.clear(sf::Color(18, 18, 28));
@@ -273,15 +391,14 @@ static void draw_login(sf::RenderWindow& win, sf::Font& font)
     }
 }
 
-// ── 게임 화면 ─────────────────────────────────────────────────
+// ── 게임 화면 ─────────────────────────────────────────────────────
 static void draw_game(sf::RenderWindow& win, sf::Font& font)
 {
-    // ── 게임 뷰 (월드 좌표 = 타일 단위) ──────────────────────
+    // 게임 뷰 (월드 좌표 = 타일 단위)
     sf::View game_view(sf::FloatRect(
         g_my_x - VSIZE / 2.f,
         g_my_y - VSIZE / 2.f,
-        (float)VSIZE,
-        (float)VSIZE
+        (float)VSIZE, (float)VSIZE
     ));
     game_view.setViewport(sf::FloatRect(0.f, 0.f, 1.f, GAME_VP_H));
     win.setView(game_view);
@@ -294,8 +411,8 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         for (int dx = -1; dx <= VSIZE; ++dx) {
             int wx = g_my_x - VSIZE / 2 + dx;
             int wy = g_my_y - VSIZE / 2 + dy;
-            bool out_of_bounds = wx < 0 || wx >= WORLD_WIDTH || wy < 0 || wy >= WORLD_HEIGHT;
-            tile.setFillColor(out_of_bounds ? sf::Color(8, 8, 12) : sf::Color(28, 28, 36));
+            bool oob = wx < 0 || wx >= WORLD_WIDTH || wy < 0 || wy >= WORLD_HEIGHT;
+            tile.setFillColor(oob ? sf::Color(8, 8, 12) : sf::Color(28, 28, 36));
             tile.setPosition((float)wx, (float)wy);
             win.draw(tile);
         }
@@ -307,25 +424,31 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
     {
         std::lock_guard<std::mutex> lk(g_objs_lock);
         snaps.reserve(g_objs.size());
-        for (auto& [id, o] : g_objs)
-            snaps.push_back({ o });
+        for (auto& [id, o] : g_objs) snaps.push_back({ o });
     }
 
-    // 오브젝트 사각형 (월드 뷰)
+    // 오브젝트 사각형 + HP 바 (월드 뷰)
     sf::RectangleShape obj_rect(sf::Vector2f(0.84f, 0.84f));
     for (auto& s : snaps) {
-        sf::Color c = s.info.is_npc ? sf::Color(200, 55, 55) : sf::Color(55, 185, 80);
+        sf::Color c;
+        if      (s.info.npc_type == NPC_AGRO)  c = sf::Color(220, 60, 60);
+        else if (s.info.npc_type == NPC_PEACE) c = sf::Color(180, 100, 40);
+        else                                    c = sf::Color(55, 185, 80);
         obj_rect.setFillColor(c);
         obj_rect.setPosition(s.info.x + 0.08f, s.info.y + 0.08f);
         win.draw(obj_rect);
+
+        if (s.info.npc_type != NPC_PC)
+            draw_hp_bar(win, (float)s.info.x, (float)s.info.y, s.info.hp, s.info.max_hp);
     }
 
-    // 내 캐릭터 (월드 뷰)
+    // 내 캐릭터 + HP 바
     obj_rect.setFillColor(sf::Color(70, 115, 255));
     obj_rect.setPosition(g_my_x + 0.08f, g_my_y + 0.08f);
     win.draw(obj_rect);
+    draw_hp_bar(win, (float)g_my_x, (float)g_my_y, g_my_hp, g_my_max_hp);
 
-    // ── 픽셀 뷰로 전환해서 텍스트 레이블 ────────────────────
+    // 픽셀 뷰로 전환해서 이름 레이블 출력
     win.setView(win.getDefaultView());
 
     sf::Text lbl("", font, 11);
@@ -333,10 +456,13 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         sf::Vector2i sp = win.mapCoordsToPixel(
             sf::Vector2f(s.info.x + 0.5f, s.info.y + 0.5f), game_view);
         if (sp.x < 0 || sp.x > WIN_W || sp.y < 0 || sp.y > WIN_H - UI_H) continue;
+
+        sf::Color tc = (s.info.npc_type == NPC_AGRO)  ? sf::Color(255, 130, 130) :
+                       (s.info.npc_type == NPC_PEACE) ? sf::Color(210, 160, 90) :
+                                                         sf::Color(140, 230, 140);
         lbl.setString(s.info.name);
-        sf::Color c = s.info.is_npc ? sf::Color(255, 140, 140) : sf::Color(140, 230, 140);
         draw_text_shadowed(win, lbl,
-            sf::Vector2f(sp.x - lbl.getLocalBounds().width / 2.f, (float)sp.y - 10.f), c);
+            sf::Vector2f(sp.x - lbl.getLocalBounds().width / 2.f, (float)sp.y - 14.f), tc);
     }
 
     // 내 이름
@@ -344,50 +470,135 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
     sf::Vector2i my_sp = win.mapCoordsToPixel(
         sf::Vector2f(g_my_x + 0.5f, g_my_y + 0.5f), game_view);
     draw_text_shadowed(win, lbl,
-        sf::Vector2f(my_sp.x - lbl.getLocalBounds().width / 2.f, (float)my_sp.y - 10.f),
+        sf::Vector2f(my_sp.x - lbl.getLocalBounds().width / 2.f, (float)my_sp.y - 14.f),
         sf::Color(180, 200, 255));
 
-    // ── UI 패널 ───────────────────────────────────────────────
+    // ── UI 패널 ──────────────────────────────────────────────────
+    constexpr float CHAT_BOX_H = 22.f;
+    constexpr float CHAT_BOX_B = 8.f;   // 패널 하단 여백
+    float ui_top  = (float)(WIN_H - UI_H);
+    float chat_y  = (float)WIN_H - CHAT_BOX_H - CHAT_BOX_B;   // 채팅창 Y (패널 하단 고정)
+    float msg_end = chat_y - 4.f;                               // 메시지가 올라올 수 있는 최하단
+    float msg_start = ui_top + 36.f;                            // 메시지 최상단 (HP/힌트 아래)
+
     sf::RectangleShape ui_bg(sf::Vector2f((float)WIN_W, (float)UI_H));
-    ui_bg.setPosition(0.f, (float)(WIN_H - UI_H));
+    ui_bg.setPosition(0.f, ui_top);
     ui_bg.setFillColor(sf::Color(12, 12, 22));
     win.draw(ui_bg);
 
     sf::RectangleShape sep(sf::Vector2f((float)WIN_W, 1.f));
-    sep.setPosition(0.f, (float)(WIN_H - UI_H));
+    sep.setPosition(0.f, ui_top);
     sep.setFillColor(sf::Color(60, 60, 90));
     win.draw(sep);
 
-    // 상태 표시
-    char status_buf[128];
-    sprintf_s(status_buf, "ID: %-6d  X: %-5d  Y: %-5d       [Arrow] 이동", g_my_id, g_my_x, g_my_y);
-    sf::Text status_text(status_buf, font, 13);
-    status_text.setFillColor(sf::Color(150, 155, 180));
-    status_text.setPosition(10.f, (float)(WIN_H - UI_H) + 6.f);
-    win.draw(status_text);
+    // HP 바
+    {
+        float hpRatio = (g_my_max_hp > 0) ? (float)g_my_hp / g_my_max_hp : 0.f;
+        hpRatio = std::max(0.f, hpRatio);
+        constexpr float BAR_W = 160.f;
 
-    // 메시지 로그
-    std::lock_guard<std::mutex> lk(g_msgs_lock);
-    float my2 = (float)(WIN_H - UI_H) + 28.f;
-    sf::Text msg_text("", font, 13);
-    for (auto& m : g_msgs) {
-        msg_text.setString(m);
-        msg_text.setFillColor(sf::Color(120, 200, 120));
-        msg_text.setPosition(10.f, my2);
-        win.draw(msg_text);
-        my2 += 17.f;
+        sf::RectangleShape hpBg({ BAR_W, 11.f });
+        hpBg.setFillColor(sf::Color(80, 0, 0));
+        hpBg.setPosition(10.f, ui_top + 5.f);
+        win.draw(hpBg);
+
+        if (hpRatio > 0.f) {
+            sf::RectangleShape hpBar({ BAR_W * hpRatio, 11.f });
+            hpBar.setFillColor(hpRatio > 0.5f ? sf::Color(0, 200, 50)
+                             : hpRatio > 0.25f ? sf::Color(220, 180, 0)
+                             : sf::Color(220, 40, 40));
+            hpBar.setPosition(10.f, ui_top + 5.f);
+            win.draw(hpBar);
+        }
+
+        char hp_buf[32];
+        sprintf_s(hp_buf, "HP %d/%d", g_my_hp, g_my_max_hp);
+        sf::Text hp_text(hp_buf, font, 11);
+        hp_text.setFillColor(sf::Color(210, 215, 225));
+        hp_text.setPosition(12.f, ui_top + 4.f);
+        win.draw(hp_text);
+    }
+
+    // EXP 바 (HP 바 오른쪽)
+    {
+        float expRatio = (g_my_exp_next > 0) ? std::min(1.f, (float)g_my_xp / g_my_exp_next) : 0.f;
+        constexpr float EXP_X = 180.f;
+        constexpr float EXP_W = 150.f;
+
+        sf::RectangleShape expBg({ EXP_W, 11.f });
+        expBg.setFillColor(sf::Color(20, 20, 60));
+        expBg.setPosition(EXP_X, ui_top + 5.f);
+        win.draw(expBg);
+
+        if (expRatio > 0.f) {
+            sf::RectangleShape expBar({ EXP_W * expRatio, 11.f });
+            expBar.setFillColor(sf::Color(80, 120, 240));
+            expBar.setPosition(EXP_X, ui_top + 5.f);
+            win.draw(expBar);
+        }
+
+        char exp_buf[48];
+        sprintf_s(exp_buf, "Lv.%d  XP %d/%d", g_my_level, g_my_xp, g_my_exp_next);
+        sf::Text exp_text(exp_buf, font, 11);
+        exp_text.setFillColor(sf::Color(180, 190, 255));
+        exp_text.setPosition(EXP_X + 2.f, ui_top + 4.f);
+        win.draw(exp_text);
+    }
+
+    // 조작 힌트
+    char hint_buf[128];
+    sprintf_s(hint_buf, "ID:%-5d  X:%-4d Y:%-4d    [Arrow]Move  [A]Attack  [T]Chat",
+              g_my_id, g_my_x, g_my_y);
+    sf::Text hint_text(hint_buf, font, 11);
+    hint_text.setFillColor(sf::Color(100, 105, 130));
+    hint_text.setPosition(10.f, ui_top + 19.f);
+    win.draw(hint_text);
+
+    // 메시지 로그 (msg_start 부터 아래로, msg_end 넘으면 클리핑)
+    {
+        std::lock_guard<std::mutex> lk(g_msgs_lock);
+        sf::Text msg_text("", font, 12);
+        float my = msg_start;
+        for (auto& m : g_msgs) {
+            if (my + MSG_LINE_H > msg_end) break;   // 채팅창 위에서 짤림 방지
+            msg_text.setString(sf::String::fromUtf8(m.begin(), m.end()));
+            sf::Color mc = (m.size() > 0 && m[0] == '[') ? sf::Color(210, 210, 255) :
+                           (m.find("hit") != std::string::npos) ? sf::Color(255, 165, 60) :
+                           sf::Color(100, 195, 100);
+            msg_text.setFillColor(mc);
+            msg_text.setPosition(10.f, my);
+            win.draw(msg_text);
+            my += (float)MSG_LINE_H;
+        }
+    }
+
+    // 채팅 입력창 (하단 고정, 항상 테두리 표시 / 비활성 시 어둡게)
+    {
+        sf::RectangleShape chat_box(sf::Vector2f((float)WIN_W - 20.f, CHAT_BOX_H));
+        chat_box.setPosition(10.f, chat_y);
+        chat_box.setFillColor(sf::Color(22, 22, 38));
+        chat_box.setOutlineColor(g_chat_mode ? sf::Color(100, 140, 255) : sf::Color(50, 50, 70));
+        chat_box.setOutlineThickness(1.f);
+        win.draw(chat_box);
+
+        std::string chat_display = g_chat_mode ? (">" + g_chat_input + "|")
+                                               : "[T] 채팅 입력";
+        sf::Text chat_text(sf::String::fromUtf8(chat_display.begin(), chat_display.end()), font, 12);
+        chat_text.setFillColor(g_chat_mode ? sf::Color(220, 220, 245) : sf::Color(70, 70, 90));
+        chat_text.setPosition(14.f, chat_y + 4.f);
+        win.draw(chat_text);
     }
 }
 
-// ── main ──────────────────────────────────────────────────────
+// ── main ──────────────────────────────────────────────────────────
 int main()
 {
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
 
     sf::Font font;
-    if (!font.loadFromFile("C:/Windows/Fonts/consola.ttf"))
-        font.loadFromFile("C:/Windows/Fonts/malgun.ttf");   // 한글 폰트 fallback
+    if (!font.loadFromFile("C:/Windows/Fonts/malgun.ttf"))
+        font.loadFromFile("C:/Windows/Fonts/consola.ttf");
 
     sf::RenderWindow window(
         sf::VideoMode(WIN_W, WIN_H),
@@ -412,44 +623,62 @@ int main()
                 if (event.type == sf::Event::TextEntered) {
                     char c = (char)event.text.unicode;
                     std::string& field = (g_focus == 0) ? g_input_ip : g_input_name;
-                    if (c == '\b') {
-                        if (!field.empty()) field.pop_back();
-                    } else if (c == '\t') {
-                        g_focus = 1 - g_focus;
-                    } else if (c >= 32 && c < 127 && (int)field.size() < MAX_NAME_LEN - 1) {
+                    if (c == '\b') { if (!field.empty()) field.pop_back(); }
+                    else if (c == '\t') { g_focus = 1 - g_focus; }
+                    else if (c >= 32 && c < 127 && (int)field.size() < MAX_NAME_LEN - 1)
                         field += c;
-                    }
                 }
                 if (event.type == sf::Event::KeyPressed &&
-                    event.key.code == sf::Keyboard::Enter)
-                {
-                    if (!g_input_name.empty()) {
-                        if (!do_connect(g_input_ip, g_input_name))
-                            push_msg("서버 연결 실패.");
-                    }
+                    event.key.code == sf::Keyboard::Enter) {
+                    if (!g_input_name.empty() && !do_connect(g_input_ip, g_input_name))
+                        push_msg("서버 연결 실패.");
                 }
             }
             else  // PLAYING
             {
-                if (event.type == sf::Event::KeyPressed) {
-                    switch (event.key.code) {
-                    case sf::Keyboard::Up:    send_move(UP);    g_move_time += 500; break;
-                    case sf::Keyboard::Down:  send_move(DOWN);  g_move_time += 500; break;
-                    case sf::Keyboard::Left:  send_move(LEFT);  g_move_time += 500; break;
-                    case sf::Keyboard::Right: send_move(RIGHT); g_move_time += 500; break;
-                    default: break;
+                if (g_chat_mode) {
+                    // 채팅 모드 입력
+                    if (event.type == sf::Event::TextEntered) {
+                        char c = (char)event.text.unicode;
+                        if (c == '\b') {
+                            if (!g_chat_input.empty()) g_chat_input.pop_back();
+                        } else if (c >= 32 && c < 127 && (int)g_chat_input.size() < MAX_CHAT_LEN - 1) {
+                            g_chat_input += c;
+                        }
+                    }
+                    if (event.type == sf::Event::KeyPressed) {
+                        if (event.key.code == sf::Keyboard::Enter) {
+                            send_chat(g_chat_input);
+                            g_chat_input.clear();
+                            g_chat_mode = false;
+                        } else if (event.key.code == sf::Keyboard::Escape) {
+                            g_chat_input.clear();
+                            g_chat_mode = false;
+                        }
+                    }
+                } else {
+                    // 일반 게임 입력
+                    if (event.type == sf::Event::KeyPressed) {
+                        switch (event.key.code) {
+                        case sf::Keyboard::Up:    send_move(UP);    g_move_time += 500; break;
+                        case sf::Keyboard::Down:  send_move(DOWN);  g_move_time += 500; break;
+                        case sf::Keyboard::Left:  send_move(LEFT);  g_move_time += 500; break;
+                        case sf::Keyboard::Right: send_move(RIGHT); g_move_time += 500; break;
+                        case sf::Keyboard::A:     send_attack(); break;
+                        case sf::Keyboard::T:
+                            g_chat_mode = true;
+                            g_chat_input.clear();
+                            break;
+                        default: break;
+                        }
                     }
                 }
             }
         }
 
         window.clear(sf::Color(18, 18, 28));
-
-        if (g_state == AppState::LOGIN)
-            draw_login(window, font);
-        else
-            draw_game(window, font);
-
+        if (g_state == AppState::LOGIN) draw_login(window, font);
+        else                             draw_game(window, font);
         window.display();
     }
 

@@ -27,6 +27,8 @@ void update_player_view(int player_id);
 void send_login_fail(SOCKET client, const char* message);
 int get_new_player_id();
 void process_npc_move(int npc_id);
+void process_npc_respawn(int npc_id);
+void process_hp_regen(int player_id);
 void worker_thread();
 void timer_thread();
 void InitializeNPC();

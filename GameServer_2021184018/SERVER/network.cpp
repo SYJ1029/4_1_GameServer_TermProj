@@ -215,11 +215,42 @@ void worker_thread()
 			delete exp_over;
 			process_npc_move(key);
 			break;
+		case IO_HP_REGEN:
+			delete exp_over;
+			process_hp_regen(key);
+			break;
+		case IO_NPC_RESPAWN:
+			delete exp_over;
+			process_npc_respawn(key);
+			break;
 		default:
 			cout << "Unknown IO type.\n";
 			break;
 		}
 	}
+}
+
+void process_hp_regen(int player_id)
+{
+	auto obj = get_object(player_id);
+	if (!obj || !is_pc(player_id)) return;
+	SESSION* player = to_player(obj);
+	if (!player->can_send() || player->m_state != CS_PLAYING) return;
+
+	if (player->m_hp < player->m_max_hp) {
+		short regen = std::max<short>(1, player->m_max_hp / 10);
+		player->m_hp = std::min(player->m_max_hp,
+		                        static_cast<short>(player->m_hp + regen));
+		player->send_stat_info(player_id, player->m_hp, player->m_max_hp,
+		                       player->m_level, player->m_xp,
+		                       player->exp_for_next_level());
+	}
+
+	event_type ev;
+	ev.obj_id      = player_id;
+	ev.event_id    = EVENT_HP_REGEN;
+	ev.wakeup_time = system_clock::now() + milliseconds(HP_REGEN_TIME);
+	timer_queue.push(ev);
 }
 
 void timer_thread()
@@ -230,8 +261,16 @@ void timer_thread()
 			auto now = system_clock::now();
 			if (ev.wakeup_time <= now) {
 				if (ev.event_id == EVENT_NPC_MOVE) {
-					EXP_OVER* move_over = new EXP_OVER(IO_NPC_MOVE);
-					PostQueuedCompletionStatus(g_iocp, 1, ev.obj_id, &move_over->m_over);
+					EXP_OVER* over = new EXP_OVER(IO_NPC_MOVE);
+					PostQueuedCompletionStatus(g_iocp, 1, ev.obj_id, &over->m_over);
+				}
+				else if (ev.event_id == EVENT_HP_REGEN) {
+					EXP_OVER* over = new EXP_OVER(IO_HP_REGEN);
+					PostQueuedCompletionStatus(g_iocp, 1, ev.obj_id, &over->m_over);
+				}
+				else if (ev.event_id == EVENT_NPC_RESPAWN) {
+					EXP_OVER* over = new EXP_OVER(IO_NPC_RESPAWN);
+					PostQueuedCompletionStatus(g_iocp, 1, ev.obj_id, &over->m_over);
 				}
 			}
 			else {

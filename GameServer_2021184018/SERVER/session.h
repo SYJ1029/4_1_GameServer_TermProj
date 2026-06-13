@@ -3,82 +3,97 @@
 
 class SESSION : public CObject {
 public:
-	SOCKET m_client;
-	EXP_OVER m_recv_over;
-	int m_prev_recv;
-	std::unordered_set<int> m_visible_objects;
-	std::mutex m_visible_mutex;
+    SOCKET    m_client;
+    EXP_OVER  m_recv_over;
+    int       m_prev_recv;
+    int       m_xp;
+    std::unordered_set<int> m_visible_objects;
+    std::mutex              m_visible_mutex;
 
-	SESSION()
-		: m_client(INVALID_SOCKET), m_prev_recv(0)
-	{
-		m_state = CS_FREE;
-		m_recv_over.m_iotype = IO_RECV;
-	}
+    int exp_for_next_level() const { return 100 * (1 << (m_level - 1)); }
 
-	SESSION(SOCKET s, int id)
-		: m_client(s), m_prev_recv(0)
-	{
-		m_id = id;
-		m_state = CS_CONNECT;
-		m_recv_over.m_iotype = IO_RECV;
-		m_x = rand() % WORLD_WIDTH;
-		m_y = rand() % WORLD_HEIGHT;
-	}
+    SESSION()
+        : m_client(INVALID_SOCKET), m_prev_recv(0), m_xp(0)
+    {
+        m_state = CS_FREE;
+        m_recv_over.m_iotype = IO_RECV;
+    }
 
-	~SESSION()
-	{
-		if (m_client != INVALID_SOCKET)
-			closesocket(m_client);
-	}
+    SESSION(SOCKET s, int id)
+        : m_client(s), m_prev_recv(0), m_xp(0)
+    {
+        m_id      = id;
+        m_level   = 1;
+        m_state   = CS_CONNECT;
+        m_hp      = PC_MAX_HP;
+        m_max_hp  = PC_MAX_HP;
+        m_recv_over.m_iotype = IO_RECV;
+        m_x = PC_SPAWN_X;
+        m_y = PC_SPAWN_Y;
+    }
 
-	bool can_send() const
-	{
-		return (m_id < MAX_PLAYERS) && m_client != INVALID_SOCKET;
-	}
+    ~SESSION()
+    {
+        if (m_client != INVALID_SOCKET)
+            closesocket(m_client);
+    }
 
-	void do_recv()
-	{
-		DWORD recv_flag = 0;
-		memset(&m_recv_over.m_over, 0, sizeof(m_recv_over.m_over));
-		m_recv_over.m_wsa.len = BUF_SIZE - m_prev_recv;
-		m_recv_over.m_wsa.buf = m_recv_over.m_buff + m_prev_recv;
-		WSARecv(m_client, &m_recv_over.m_wsa, 1, 0, &recv_flag, &m_recv_over.m_over, nullptr);
-	}
+    bool can_send() const
+    {
+        return (m_id < MAX_PLAYERS) && m_client != INVALID_SOCKET;
+    }
 
-	void do_send(int num_bytes, char* data)
-	{
-		if (!can_send()) return;
-		EXP_OVER* over = new EXP_OVER(IO_SEND);
-		over->m_wsa.len = num_bytes;
-		memcpy(over->m_buff, data, num_bytes);
-		WSASend(m_client, &over->m_wsa, 1, 0, 0, &over->m_over, nullptr);
-	}
+    void do_recv()
+    {
+        DWORD recv_flag = 0;
+        memset(&m_recv_over.m_over, 0, sizeof(m_recv_over.m_over));
+        m_recv_over.m_wsa.len = BUF_SIZE - m_prev_recv;
+        m_recv_over.m_wsa.buf = m_recv_over.m_buff + m_prev_recv;
+        WSARecv(m_client, &m_recv_over.m_wsa, 1, 0, &recv_flag, &m_recv_over.m_over, nullptr);
+    }
 
-	void send_login_success()
-	{
-		S2C_LoginResult packet;
-		packet.size = sizeof(packet);
-		packet.type = S2C_LOGIN_RESULT;
-		packet.success = true;
-		strcpy_s(packet.message, "Login successful.");
-		do_send(packet.size, reinterpret_cast<char*>(&packet));
-	}
+    void do_send(int num_bytes, char* data)
+    {
+        if (!can_send()) return;
+        EXP_OVER* over = new EXP_OVER(IO_SEND);
+        over->m_wsa.len = num_bytes;
+        memcpy(over->m_buff, data, num_bytes);
+        WSASend(m_client, &over->m_wsa, 1, 0, 0, &over->m_over, nullptr);
+    }
 
-	void send_avatar_info()
-	{
-		S2C_AvatarInfo packet;
-		packet.size = sizeof(packet);
-		packet.type = S2C_AVATAR_INFO;
-		packet.playerId = m_id;
-		packet.x = m_x;
-		packet.y = m_y;
-		do_send(packet.size, reinterpret_cast<char*>(&packet));
-	}
+    void send_login_success()
+    {
+        S2C_LoginResult packet;
+        packet.size    = sizeof(packet);
+        packet.type    = S2C_LOGIN_RESULT;
+        packet.success = true;
+        strcpy_s(packet.message, "Login successful.");
+        do_send(packet.size, reinterpret_cast<char*>(&packet));
+    }
 
-	void send_add_object(int object_id);
-	void send_remove_object(int object_id);
-	void send_move_object(int object_id);
-	bool process_packet(unsigned char* p);
-	void do_move(DIRECTION dir);
+    void send_avatar_info()
+    {
+        S2C_AvatarInfo packet;
+        packet.size     = sizeof(packet);
+        packet.type     = S2C_AVATAR_INFO;
+        packet.playerId = m_id;
+        packet.x        = m_x;
+        packet.y        = m_y;
+        packet.hp       = m_hp;
+        packet.max_hp   = m_max_hp;
+        packet.level    = m_level;
+        packet.exp      = m_xp;
+        packet.exp_next = exp_for_next_level();
+        do_send(packet.size, reinterpret_cast<char*>(&packet));
+    }
+
+    void send_add_object(int object_id);
+    void send_remove_object(int object_id);
+    void send_move_object(int object_id);
+    void send_chat(int sender_id, const char* sender_name, const char* msg);
+    void send_stat_info(int object_id, short hp, short max_hp, int level = 0, int exp = 0, int exp_next = 0);
+    void send_damage_info(int attacker_id, int target_id, short damage, short target_hp);
+
+    bool process_packet(unsigned char* p);
+    void do_move(DIRECTION dir);
 };
