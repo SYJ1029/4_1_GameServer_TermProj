@@ -58,8 +58,17 @@ constexpr int SECTOR_X(int x) { return x / SECTOR_SIZE; }
 constexpr int SECTOR_Y(int y) { return y / SECTOR_SIZE; }
 constexpr int SECTOR_ID(int sx, int sy) { return sy * MAX_SECTORS_X + sx; }
 
-enum IOType { IO_SEND, IO_RECV, IO_ACCEPT, IO_NPC_MOVE, IO_HP_REGEN, IO_NPC_RESPAWN };
-enum CL_STATE { CS_FREE, CS_CONNECT, CS_PLAYING, CS_LOGOUT };
+enum IOType { IO_SEND, IO_RECV, IO_ACCEPT, IO_NPC_MOVE, IO_HP_REGEN, IO_NPC_RESPAWN, IO_DB_LOGIN };
+enum CL_STATE { CS_FREE, CS_CONNECT, CS_DB_WAIT, CS_PLAYING, CS_LOGOUT };
+
+struct DB_RESULT {
+    bool  success = false;
+    short x       = PC_SPAWN_X;
+    short y       = PC_SPAWN_Y;
+    short hp      = PC_MAX_HP;
+    int   level   = 1;
+    int   exp     = 0;
+};
 
 struct event_type {
 	int obj_id;
@@ -78,7 +87,8 @@ public:
 	IOType m_iotype;
 	WSABUF m_wsa;
 	SOCKET m_client_socket;
-	char m_buff[BUF_SIZE];
+	char      m_buff[BUF_SIZE];
+	DB_RESULT m_db_result;
 
 	EXP_OVER() : m_iotype(IO_RECV), m_client_socket(INVALID_SOCKET)
 	{

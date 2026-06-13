@@ -143,6 +143,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="db.cpp" />
     <ClCompile Include="Object.cpp" />
     <ClCompile Include="GameServer.cpp" />
     <ClCompile Include="lua_manager.cpp" />
@@ -153,6 +154,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\COMMON\PROTOCOL\protocol_2026.h" />
+    <ClInclude Include="astar.h" />
+    <ClInclude Include="db.h" />
     <ClInclude Include="lua_manager.h" />
     <ClInclude Include="NPC.h" />
     <ClInclude Include="Object.h" />

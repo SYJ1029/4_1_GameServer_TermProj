@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "server.h"
 #include "lua_manager.h"
+#include "db.h"
 
 // Global variable definitions
 concurrency::concurrent_priority_queue<event_type> timer_queue;
@@ -40,6 +41,7 @@ int main()
 
 	vector<thread> worker_threads;
 	thread timer_th(timer_thread);
+	thread db_th(db_thread);
 	unsigned int hw_threads = thread::hardware_concurrency();
 	int num_threads = hw_threads > 1 ? static_cast<int>(hw_threads - 1) : 1;
 	for (int i = 0; i < num_threads; ++i)
@@ -48,6 +50,7 @@ int main()
 	for (auto& th : worker_threads)
 		th.join();
 	timer_th.join();
+	db_th.join();
 
 	closesocket(g_server);
 	WSACleanup();

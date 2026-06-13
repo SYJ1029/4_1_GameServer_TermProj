@@ -1,5 +1,6 @@
 #include "server.h"
 #include "lua_manager.h"
+#include "astar.h"
 
 void broadcast_npc_state(int npc_id, CNPC* npc)
 {
@@ -201,18 +202,10 @@ void CNPC::do_chase_move()
         return;
     }
 
-    // 타겟 방향으로 이동
+    // A*로 다음 스텝 계산
     short old_x = m_x, old_y = m_y;
-
-    short cx = m_x, cy = m_y;
-    if (dx >= dy) {
-        if (tx > m_x && m_x < WORLD_WIDTH - 1)  ++cx;
-        else if (tx < m_x && m_x > 0)            --cx;
-    } else {
-        if (ty > m_y && m_y < WORLD_HEIGHT - 1)  ++cy;
-        else if (ty < m_y && m_y > 0)            --cy;
-    }
-    if (!is_obstacle(cx, cy)) { m_x = cx; m_y = cy; }
+    auto [nx, ny] = astar_next_step(m_x, m_y, tx, ty);
+    if (nx != m_x || ny != m_y) { m_x = nx; m_y = ny; }
 
     update_viewers(old_x, old_y);
 }

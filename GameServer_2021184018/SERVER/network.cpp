@@ -1,4 +1,5 @@
 #include "server.h"
+#include "db.h"
 
 void error_display(const wchar_t* msg, int err_no)
 {
@@ -58,6 +59,11 @@ void disconnect(int key)
 	if (nullptr == obj || obj->m_id >= NPC_ID_START) return;
 
 	SESSION* cl = to_player(obj);
+
+	if (cl->m_state == CS_PLAYING)
+		db_push_save(key, cl->m_username, cl->m_x, cl->m_y,
+		             cl->m_hp, cl->m_level, cl->m_xp);
+
 	cl->m_state = CS_LOGOUT;
 	sector_manager.remove_object_from_sector(key, cl->m_x, cl->m_y);
 
@@ -223,6 +229,37 @@ void worker_thread()
 			delete exp_over;
 			process_npc_respawn(key);
 			break;
+		case IO_DB_LOGIN:
+		{
+			auto obj = get_object(key);
+			if (!obj || to_player(obj)->m_state != CS_DB_WAIT) {
+				delete exp_over;
+				break;
+			}
+			SESSION* cl = to_player(obj);
+			if (!exp_over->m_db_result.success) {
+				cl->m_state = CS_LOGOUT;
+				delete exp_over;
+				break;
+			}
+			cl->m_x     = exp_over->m_db_result.x;
+			cl->m_y     = exp_over->m_db_result.y;
+			cl->m_hp    = exp_over->m_db_result.hp;
+			cl->m_max_hp = PC_MAX_HP;
+			cl->m_level = exp_over->m_db_result.level;
+			cl->m_xp    = exp_over->m_db_result.exp;
+			cl->m_state = CS_PLAYING;
+			sector_manager.add_object_to_sector(key, cl->m_x, cl->m_y);
+			cl->send_avatar_info();
+			update_player_view(key);
+			event_type ev;
+			ev.obj_id      = key;
+			ev.event_id    = EVENT_HP_REGEN;
+			ev.wakeup_time = system_clock::now() + milliseconds(HP_REGEN_TIME);
+			timer_queue.push(ev);
+			delete exp_over;
+			break;
+		}
 		default:
 			cout << "Unknown IO type.\n";
 			break;

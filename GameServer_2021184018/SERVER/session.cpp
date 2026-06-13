@@ -1,5 +1,6 @@
 #include "server.h"
 #include "lua_manager.h"
+#include "db.h"
 
 void SESSION::send_add_object(int object_id)
 {
@@ -169,19 +170,30 @@ bool SESSION::process_packet(unsigned char* p)
     {
     case C2S_LOGIN:
     {
+        if (m_state != CS_CONNECT) break;
         C2S_Login* packet = reinterpret_cast<C2S_Login*>(p);
         strncpy_s(m_username, packet->username, MAX_NAME_LEN - 1);
-        m_state = CS_PLAYING;
-        sector_manager.add_object_to_sector(m_id, m_x, m_y);
-        send_avatar_info();
-        update_player_view(m_id);
 
-        // HP 자동 회복 타이머 시작
-        event_type ev;
-        ev.obj_id      = m_id;
-        ev.event_id    = EVENT_HP_REGEN;
-        ev.wakeup_time = system_clock::now() + milliseconds(HP_REGEN_TIME);
-        timer_queue.push(ev);
+        if (strncmp(m_username, "bot_", 4) == 0) {
+            // 스트레스 테스트 봇: DB 스킵, 기본값으로 즉시 게임 진입
+            m_state = CS_PLAYING;
+            sector_manager.add_object_to_sector(m_id, m_x, m_y);
+            send_avatar_info();
+            update_player_view(m_id);
+            event_type regen_ev;
+            regen_ev.obj_id      = m_id;
+            regen_ev.event_id    = EVENT_HP_REGEN;
+            regen_ev.wakeup_time = system_clock::now() + milliseconds(HP_REGEN_TIME);
+            timer_queue.push(regen_ev);
+            break;
+        }
+
+        m_state = CS_DB_WAIT;
+        DB_EVENT ev;
+        ev.type       = DB_LOGIN;
+        ev.session_id = m_id;
+        strncpy_s(ev.login_id, m_username, MAX_NAME_LEN - 1);
+        db_queue.push(ev);
         break;
     }
     case C2S_MOVE:
