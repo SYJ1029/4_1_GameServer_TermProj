@@ -6,6 +6,7 @@
 lua_State*                  g_lua          = nullptr;
 std::vector<bool>           g_obstacle_map;
 std::vector<NpcSpawnGroup>  g_npc_groups;
+std::vector<ObstacleRect>   g_obstacle_rects;
 
 // ── 장애물 테이블 파싱 ────────────────────────────────────────────
 static void load_obstacles(lua_State* L)
@@ -29,6 +30,8 @@ static void load_obstacles(lua_State* L)
         int ox = get_int("x"), oy = get_int("y");
         int ow = get_int("w"), oh = get_int("h");
 
+        g_obstacle_rects.push_back({ ox, oy, ow, oh });
+
         for (int dy = 0; dy < oh; ++dy)
             for (int dx = 0; dx < ow; ++dx) {
                 int tx = ox + dx, ty = oy + dy;
@@ -39,7 +42,7 @@ static void load_obstacles(lua_State* L)
         lua_pop(L, 1);
     }
     lua_pop(L, 1);
-    std::cout << "[Lua] Obstacles loaded.\n";
+    std::cout << "[Lua] Obstacles loaded: " << g_obstacle_rects.size() << " rects\n";
 }
 
 // ── NPC 스폰 그룹 테이블 파싱 ────────────────────────────────────
@@ -80,7 +83,7 @@ static void load_npc_groups(lua_State* L)
         lua_pop(L, 1);
     }
     lua_pop(L, 1);
-    std::cout << "[Lua] NPC groups loaded: " << g_npc_groups.size() << "\n";
+    std::cout << "[Lua] NPC groups loaded: " << g_npc_groups.size() << " groups\n";
 }
 
 // ── 공개 함수 ─────────────────────────────────────────────────────
@@ -104,4 +107,31 @@ bool init_lua(const char* script_path)
 void close_lua()
 {
     if (g_lua) { lua_close(g_lua); g_lua = nullptr; }
+}
+
+bool write_obstacle_bin(const char* path)
+{
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "wb") != 0 || !f) {
+        std::cerr << "[Map] Failed to write obstacles.bin: " << path << "\n";
+        return false;
+    }
+
+    const char magic[4] = { 'O','B','S','1' };
+    fwrite(magic, 1, 4, f);
+
+    int32_t n = (int32_t)g_obstacle_rects.size();
+    fwrite(&n, 4, 1, f);
+
+    for (auto& r : g_obstacle_rects) {
+        int16_t vals[4] = {
+            (int16_t)r.x, (int16_t)r.y,
+            (int16_t)r.w, (int16_t)r.h
+        };
+        fwrite(vals, 2, 4, f);
+    }
+
+    fclose(f);
+    std::cout << "[Map] obstacles.bin saved (" << n << " rects) -> " << path << "\n";
+    return true;
 }

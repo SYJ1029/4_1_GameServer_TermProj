@@ -33,9 +33,9 @@ constexpr int EVENT_NPC_MOVE    = 1;
 constexpr int EVENT_HP_REGEN    = 2;
 constexpr int EVENT_NPC_RESPAWN = 3;
 
-// 스폰 위치
-constexpr short PC_SPAWN_X = WORLD_WIDTH  / 2;
-constexpr short PC_SPAWN_Y = WORLD_HEIGHT / 2;
+// 스폰 위치 — 맵 중앙 북쪽
+constexpr short PC_SPAWN_X = 1000;
+constexpr short PC_SPAWN_Y = 100;
 
 // NPC 기본 레벨
 constexpr int NPC_PEACE_LEVEL = 1;

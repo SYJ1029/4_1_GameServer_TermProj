@@ -54,6 +54,30 @@ constexpr int MSG_LINE_H  = 15;   // 메시지 한 줄 높이 (px)
 static bool        g_chat_mode  = false;
 static std::string g_chat_input;
 
+// ── 장애물 ────────────────────────────────────────────────────────
+struct ObstacleRect { short x, y, w, h; };
+static std::vector<ObstacleRect> g_obstacles;
+
+static void load_obstacles_bin(const char* path)
+{
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "rb") != 0 || !f) return;
+
+    char magic[4];
+    fread(magic, 1, 4, f);
+    if (magic[0]!='O'||magic[1]!='B'||magic[2]!='S'||magic[3]!='1') { fclose(f); return; }
+
+    int32_t n = 0;
+    fread(&n, 4, 1, f);
+    g_obstacles.resize(n);
+    for (int i = 0; i < n; ++i) {
+        int16_t vals[4];
+        fread(vals, 2, 4, f);
+        g_obstacles[i] = { vals[0], vals[1], vals[2], vals[3] };
+    }
+    fclose(f);
+}
+
 // ── 앱 상태 ───────────────────────────────────────────────────────
 enum class AppState { LOGIN, PLAYING };
 static AppState    g_state      = AppState::LOGIN;
@@ -421,6 +445,23 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         }
     }
 
+    // 장애물 렌더링
+    {
+        float vx0 = g_my_x - VSIZE / 2.f, vy0 = g_my_y - VSIZE / 2.f;
+        float vx1 = vx0 + VSIZE,           vy1 = vy0 + VSIZE;
+        sf::RectangleShape wall;
+        wall.setFillColor(sf::Color(90, 75, 60));
+        wall.setOutlineColor(sf::Color(60, 50, 40));
+        wall.setOutlineThickness(0.04f);
+        for (auto& r : g_obstacles) {
+            if (r.x + r.w < vx0 || r.x > vx1) continue;
+            if (r.y + r.h < vy0 || r.y > vy1) continue;
+            wall.setSize(sf::Vector2f((float)r.w, (float)r.h));
+            wall.setPosition((float)r.x, (float)r.y);
+            win.draw(wall);
+        }
+    }
+
     // 오브젝트 스냅샷 (lock 최소화)
     struct Snap { ObjInfo info; };
     std::vector<Snap> snaps;
@@ -611,6 +652,8 @@ int main()
 {
     WSADATA wsa;
     WSAStartup(MAKEWORD(2, 2), &wsa);
+
+    load_obstacles_bin("../../COMMON/Binaries/Map/obstacles.bin");
 
     sf::Font font;
     if (!font.loadFromFile("C:/Windows/Fonts/malgun.ttf"))

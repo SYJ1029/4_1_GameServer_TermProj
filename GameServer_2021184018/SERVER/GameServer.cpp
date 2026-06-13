@@ -25,8 +25,9 @@ int main()
 	listen(g_server, SOMAXCONN);
 
 	init_lua("map.lua");
+	write_obstacle_bin("../../COMMON/Binaries/Map/obstacles.bin");
 	InitializeNPC();
-	close_lua();   // Lua 상태는 초기화 이후 불필요
+	close_lua();
 
 	g_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	CreateIoCompletionPort((HANDLE)g_server, g_iocp, -1, 0);

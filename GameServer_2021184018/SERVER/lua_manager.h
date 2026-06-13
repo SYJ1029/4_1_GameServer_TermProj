@@ -21,9 +21,11 @@ struct ObstacleRect {
 extern lua_State*                  g_lua;
 extern std::vector<bool>           g_obstacle_map;   // [y * WORLD_WIDTH + x]
 extern std::vector<NpcSpawnGroup>  g_npc_groups;
+extern std::vector<ObstacleRect>   g_obstacle_rects; // 원본 rect 목록 (bin 덤프용)
 
 bool init_lua(const char* script_path);
 void close_lua();
+bool write_obstacle_bin(const char* path);
 
 inline bool is_obstacle(int x, int y)
 {
