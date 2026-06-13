@@ -127,12 +127,16 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Object.cpp" />
     <ClCompile Include="GameServer.cpp" />
     <ClCompile Include="network.cpp" />
     <ClCompile Include="npc.cpp" />
+    <ClCompile Include="pch.cpp" />
     <ClCompile Include="session.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="NPC.h" />
+    <ClInclude Include="Object.h" />
     <ClInclude Include="globals.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="sector.h" />

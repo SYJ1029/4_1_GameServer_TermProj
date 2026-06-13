@@ -3,7 +3,7 @@
 
 // Global variable definitions
 concurrency::concurrent_priority_queue<event_type> timer_queue;
-tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
+tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<CObject>>> clients;
 SectorManager sector_manager;
 SOCKET g_server;
 HANDLE g_iocp;

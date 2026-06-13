@@ -17,7 +17,7 @@ void error_display(const wchar_t* msg, int err_no)
 bool is_pc(int id)  { return id < NPC_ID_START; }
 bool is_npc(int id) { return id >= NPC_ID_START; }
 
-std::shared_ptr<SESSION> get_session(int id)
+std::shared_ptr<CObject> get_object(int id)
 {
 	auto iter = clients.find(id);
 	if (iter == clients.end()) return nullptr;
@@ -46,7 +46,7 @@ int get_new_player_id()
 		auto iter = clients.find(id);
 		if (iter == clients.end()) return id;
 
-		std::shared_ptr<SESSION> old = iter->second.load();
+		std::shared_ptr<CObject> old = iter->second.load();
 		if (nullptr == old || old->m_state == CS_FREE || old->m_state == CS_LOGOUT)
 			return id;
 	}
@@ -54,9 +54,10 @@ int get_new_player_id()
 
 void disconnect(int key)
 {
-	std::shared_ptr<SESSION> cl = get_session(key);
-	if (nullptr == cl || cl->m_id >= NPC_ID_START) return;
+	std::shared_ptr<CObject> obj = get_object(key);
+	if (nullptr == obj || obj->m_id >= NPC_ID_START) return;
 
+	SESSION* cl = to_player(obj);
 	cl->m_state = CS_LOGOUT;
 	sector_manager.remove_object_from_sector(key, cl->m_x, cl->m_y);
 
@@ -69,9 +70,9 @@ void disconnect(int key)
 
 	for (int object_id : visible) {
 		if (!is_pc(object_id)) continue;
-		std::shared_ptr<SESSION> other = get_session(object_id);
-		if (nullptr != other)
-			other->send_remove_object(key);
+		std::shared_ptr<CObject> other_obj = get_object(object_id);
+		if (nullptr != other_obj)
+			to_player(other_obj)->send_remove_object(key);
 	}
 
 	if (cl->m_client != INVALID_SOCKET) {
@@ -83,8 +84,10 @@ void disconnect(int key)
 
 void update_player_view(int player_id)
 {
-	std::shared_ptr<SESSION> player = get_session(player_id);
-	if (nullptr == player || !player->can_send()) return;
+	std::shared_ptr<CObject> player_obj = get_object(player_id);
+	if (nullptr == player_obj) return;
+	SESSION* player = to_player(player_obj);
+	if (!player->can_send()) return;
 
 	std::unordered_set<int> old_view;
 	{
@@ -96,7 +99,7 @@ void update_player_view(int player_id)
 	for (int object_id : sector_manager.get_objects_in_adjacent_sectors(player->m_x, player->m_y)) {
 		if (object_id == player_id) continue;
 
-		std::shared_ptr<SESSION> obj = get_session(object_id);
+		std::shared_ptr<CObject> obj = get_object(object_id);
 		if (nullptr == obj) continue;
 		if (obj->m_state != CS_PLAYING) continue;
 		if (player->can_see(obj->m_x, obj->m_y))
@@ -106,18 +109,18 @@ void update_player_view(int player_id)
 	player->send_move_object(player_id);
 
 	for (int object_id : new_view) {
-		std::shared_ptr<SESSION> obj = get_session(object_id);
+		std::shared_ptr<CObject> obj = get_object(object_id);
 		if (nullptr == obj) continue;
 
 		if (old_view.count(object_id) == 0) {
 			player->send_add_object(object_id);
 			if (is_pc(object_id))
-				obj->send_add_object(player_id);
+				to_player(obj)->send_add_object(player_id);
 			else
-				obj->wake_up();
+				to_npc(obj)->wake_up();
 		}
 		else if (is_pc(object_id)) {
-			obj->send_move_object(player_id);
+			to_player(obj)->send_move_object(player_id);
 		}
 	}
 
@@ -126,9 +129,9 @@ void update_player_view(int player_id)
 
 		player->send_remove_object(object_id);
 		if (is_pc(object_id)) {
-			std::shared_ptr<SESSION> other = get_session(object_id);
-			if (nullptr != other)
-				other->send_remove_object(player_id);
+			std::shared_ptr<CObject> other_obj = get_object(object_id);
+			if (nullptr != other_obj)
+				to_player(other_obj)->send_remove_object(player_id);
 		}
 	}
 }
@@ -178,8 +181,9 @@ void worker_thread()
 				break;
 			}
 
-			std::shared_ptr<SESSION> cl = get_session(key);
-			if (nullptr == cl) break;
+			std::shared_ptr<CObject> obj = get_object(key);
+			if (nullptr == obj) break;
+			SESSION* cl = to_player(obj);
 
 			unsigned char* p = reinterpret_cast<unsigned char*>(exp_over->m_buff);
 			int data_size = num_bytes + cl->m_prev_recv;

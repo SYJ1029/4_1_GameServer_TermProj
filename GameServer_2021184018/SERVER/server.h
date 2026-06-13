@@ -1,16 +1,26 @@
 #pragma once
 #include "sector.h"
+#include "NPC.h"
 #include "session.h"
 
-// Global variable declarations (defined in GameServer.cpp)
 extern concurrency::concurrent_priority_queue<event_type> timer_queue;
-extern tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<SESSION>>> clients;
+extern tbb::concurrent_unordered_map<int, std::atomic<std::shared_ptr<CObject>>> clients;
 extern SectorManager sector_manager;
 extern SOCKET g_server;
 extern HANDLE g_iocp;
 extern std::atomic<int> player_index;
 
-std::shared_ptr<SESSION> get_session(int id);
+std::shared_ptr<CObject> get_object(int id);
+
+// reinterpret_cast helpers - call only after is_pc / is_npc check
+inline SESSION* to_player(const std::shared_ptr<CObject>& obj)
+{
+	return reinterpret_cast<SESSION*>(obj.get());
+}
+inline CNPC* to_npc(const std::shared_ptr<CObject>& obj)
+{
+	return reinterpret_cast<CNPC*>(obj.get());
+}
 
 void disconnect(int key);
 void update_player_view(int player_id);
