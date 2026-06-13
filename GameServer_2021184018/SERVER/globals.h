@@ -12,7 +12,7 @@
 #include <memory>
 #include <concurrent_priority_queue.h>
 #include <tbb/concurrent_unordered_map.h>
-#include "../PROTOCOL/protocol_2026.h"
+#include "../../COMMON/PROTOCOL/protocol_2026.h"
 
 #pragma comment(lib, "MSWSock.lib")
 #pragma comment(lib, "WS2_32.lib")
