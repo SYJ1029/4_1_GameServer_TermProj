@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "server.h"
+#include "lua_manager.h"
 
 // Global variable definitions
 concurrency::concurrent_priority_queue<event_type> timer_queue;
@@ -23,7 +24,9 @@ int main()
 	::bind(g_server, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
 	listen(g_server, SOMAXCONN);
 
+	init_lua("map.lua");
 	InitializeNPC();
+	close_lua();   // Lua 상태는 초기화 이후 불필요
 
 	g_iocp = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
 	CreateIoCompletionPort((HANDLE)g_server, g_iocp, -1, 0);

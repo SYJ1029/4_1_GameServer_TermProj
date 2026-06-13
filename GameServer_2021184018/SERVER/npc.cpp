@@ -1,4 +1,5 @@
 #include "server.h"
+#include "lua_manager.h"
 
 void broadcast_npc_state(int npc_id, CNPC* npc)
 {
@@ -92,14 +93,18 @@ void CNPC::do_roaming_move()
     ny = static_cast<short>(std::max(0, std::min((int)ny, WORLD_HEIGHT - 1)));
 
     if (std::abs(nx - m_origin_x) <= ROAM_RANGE &&
-        std::abs(ny - m_origin_y) <= ROAM_RANGE) {
+        std::abs(ny - m_origin_y) <= ROAM_RANGE &&
+        !is_obstacle(nx, ny)) {
         m_x = nx;
         m_y = ny;
-    } else {
-        if      (m_x < m_origin_x) ++m_x;
-        else if (m_x > m_origin_x) --m_x;
-        else if (m_y < m_origin_y) ++m_y;
-        else if (m_y > m_origin_y) --m_y;
+    } else if (!is_obstacle(m_x, m_y)) {
+        // 범위 복귀 이동
+        short rx = m_x, ry = m_y;
+        if      (m_x < m_origin_x) ++rx;
+        else if (m_x > m_origin_x) --rx;
+        else if (m_y < m_origin_y) ++ry;
+        else if (m_y > m_origin_y) --ry;
+        if (!is_obstacle(rx, ry)) { m_x = rx; m_y = ry; }
     }
 
     update_viewers(old_x, old_y);
@@ -199,13 +204,15 @@ void CNPC::do_chase_move()
     // 타겟 방향으로 이동
     short old_x = m_x, old_y = m_y;
 
+    short cx = m_x, cy = m_y;
     if (dx >= dy) {
-        if (tx > m_x && m_x < WORLD_WIDTH - 1)  ++m_x;
-        else if (tx < m_x && m_x > 0)            --m_x;
+        if (tx > m_x && m_x < WORLD_WIDTH - 1)  ++cx;
+        else if (tx < m_x && m_x > 0)            --cx;
     } else {
-        if (ty > m_y && m_y < WORLD_HEIGHT - 1)  ++m_y;
-        else if (ty < m_y && m_y > 0)            --m_y;
+        if (ty > m_y && m_y < WORLD_HEIGHT - 1)  ++cy;
+        else if (ty < m_y && m_y > 0)            --cy;
     }
+    if (!is_obstacle(cx, cy)) { m_x = cx; m_y = cy; }
 
     update_viewers(old_x, old_y);
 }
@@ -289,29 +296,72 @@ void process_npc_respawn(int npc_id)
 void InitializeNPC()
 {
     cout << "NPC initialize begin.\n";
-    for (int i = NPC_ID_START; i < NPC_ID_START + MAX_NPCS; ++i) {
-        std::shared_ptr<CNPC> npc = std::make_shared<CNPC>();
-        npc->m_id = i;
-        npc->m_x  = static_cast<short>(rand() % WORLD_WIDTH);
-        npc->m_y  = static_cast<short>(rand() % WORLD_HEIGHT);
-        npc->m_origin_x = npc->m_x;
-        npc->m_origin_y = npc->m_y;
-        sprintf_s(npc->m_username, "NPC%d", i - NPC_ID_START);
 
-        if ((i % 2) == 0) {
-            npc->m_npc_type  = NPC_PEACE_TYPE;
+    int npc_id = NPC_ID_START;
+    int total   = 0;
+
+    // Lua 스크립트에 스폰 그룹이 정의된 경우 해당 기준으로 배치
+    if (!g_npc_groups.empty()) {
+        for (auto& grp : g_npc_groups) {
+            for (int k = 0; k < grp.count && total < MAX_NPCS; ++k, ++npc_id, ++total) {
+                auto npc = std::make_shared<CNPC>();
+                npc->m_id = npc_id;
+
+                // 존 범위 내 장애물 없는 위치 탐색
+                short px, py;
+                int tries = 0;
+                do {
+                    int dx = (rand() % (grp.range * 2 + 1)) - grp.range;
+                    int dy = (rand() % (grp.range * 2 + 1)) - grp.range;
+                    px = static_cast<short>(std::max(0, std::min(grp.x + dx, WORLD_WIDTH  - 1)));
+                    py = static_cast<short>(std::max(0, std::min(grp.y + dy, WORLD_HEIGHT - 1)));
+                } while (is_obstacle(px, py) && ++tries < 100);
+
+                npc->m_x = npc->m_origin_x = px;
+                npc->m_y = npc->m_origin_y = py;
+
+                sprintf_s(npc->m_username, "%s_%d", grp.name, total);
+
+                if (grp.npc_type == 2) {
+                    npc->m_npc_type   = NPC_AGRO_TYPE;
+                    npc->m_move_state = NPC_STATE_ROAMING;
+                    npc->m_hp = npc->m_max_hp = NPC_AGRO_MAX_HP;
+                } else {
+                    npc->m_npc_type   = NPC_PEACE_TYPE;
+                    npc->m_move_state = NPC_STATE_IDLE;
+                    npc->m_hp = npc->m_max_hp = NPC_PEACE_MAX_HP;
+                }
+                npc->m_level = grp.level;
+
+                clients[npc_id] = npc;
+                sector_manager.add_object_to_sector(npc_id, px, py);
+            }
+        }
+    }
+
+    // 스크립트 부족분 or 그룹 없을 때 랜덤으로 채움
+    for (; total < MAX_NPCS; ++npc_id, ++total) {
+        auto npc = std::make_shared<CNPC>();
+        npc->m_id = npc_id;
+        npc->m_x  = npc->m_origin_x = static_cast<short>(rand() % WORLD_WIDTH);
+        npc->m_y  = npc->m_origin_y = static_cast<short>(rand() % WORLD_HEIGHT);
+        sprintf_s(npc->m_username, "NPC_%d", total);
+
+        if ((total % 2) == 0) {
+            npc->m_npc_type   = NPC_PEACE_TYPE;
             npc->m_move_state = NPC_STATE_IDLE;
-            npc->m_level     = NPC_PEACE_LEVEL;
+            npc->m_level      = NPC_PEACE_LEVEL;
             npc->m_hp = npc->m_max_hp = NPC_PEACE_MAX_HP;
         } else {
-            npc->m_npc_type  = NPC_AGRO_TYPE;
+            npc->m_npc_type   = NPC_AGRO_TYPE;
             npc->m_move_state = NPC_STATE_ROAMING;
-            npc->m_level     = NPC_AGRO_LEVEL;
+            npc->m_level      = NPC_AGRO_LEVEL;
             npc->m_hp = npc->m_max_hp = NPC_AGRO_MAX_HP;
         }
 
-        clients[i] = npc;
-        sector_manager.add_object_to_sector(i, npc->m_x, npc->m_y);
+        clients[npc_id] = npc;
+        sector_manager.add_object_to_sector(npc_id, npc->m_x, npc->m_y);
     }
-    cout << "NPC initialize end.\n";
+
+    cout << "NPC initialize end. (" << total << " NPCs)\n";
 }

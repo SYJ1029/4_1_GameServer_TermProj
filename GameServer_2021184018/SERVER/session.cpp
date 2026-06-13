@@ -1,4 +1,5 @@
 #include "server.h"
+#include "lua_manager.h"
 
 void SESSION::send_add_object(int object_id)
 {
@@ -275,12 +276,14 @@ void SESSION::do_move(DIRECTION dir)
 {
     short old_x = m_x, old_y = m_y;
 
+    short nx = m_x, ny = m_y;
     switch (dir) {
-    case UP:    if (m_y > 0)               --m_y; break;
-    case DOWN:  if (m_y < WORLD_HEIGHT - 1) ++m_y; break;
-    case LEFT:  if (m_x > 0)               --m_x; break;
-    case RIGHT: if (m_x < WORLD_WIDTH - 1)  ++m_x; break;
+    case UP:    if (ny > 0)               --ny; break;
+    case DOWN:  if (ny < WORLD_HEIGHT - 1) ++ny; break;
+    case LEFT:  if (nx > 0)               --nx; break;
+    case RIGHT: if (nx < WORLD_WIDTH - 1)  ++nx; break;
     }
+    if (!is_obstacle(nx, ny)) { m_x = nx; m_y = ny; }
 
     sector_manager.update_object_sector(m_id, old_x, old_y, m_x, m_y);
     update_player_view(m_id);
