@@ -2,6 +2,16 @@
 #include "lua_manager.h"
 #include "db.h"
 
+// ── 월드 아이템 ───────────────────────────────────────────────────
+struct WorldItem {
+    int       id;
+    short     x, y;
+    ITEM_TYPE item_type;
+    std::atomic<bool> active { true };
+};
+static std::atomic<int> g_next_item_id { 0 };
+static tbb::concurrent_unordered_map<int, std::shared_ptr<WorldItem>> g_world_items;
+
 void SESSION::send_add_object(int object_id)
 {
     if (!can_send()) return;
@@ -116,6 +126,48 @@ void SESSION::send_damage_info(int attacker_id, int target_id, short damage, sho
     do_send(packet.size, reinterpret_cast<char*>(&packet));
 }
 
+void SESSION::send_item_appear(int item_id, short x, short y, ITEM_TYPE item_type)
+{
+    if (!can_send()) return;
+    S2C_ItemAppear pkt;
+    pkt.size      = sizeof(pkt);
+    pkt.type      = S2C_ITEM_APPEAR;
+    pkt.item_id   = item_id;
+    pkt.x         = x;
+    pkt.y         = y;
+    pkt.item_type = item_type;
+    do_send(pkt.size, reinterpret_cast<char*>(&pkt));
+}
+
+void SESSION::send_item_remove(int item_id)
+{
+    if (!can_send()) return;
+    S2C_ItemRemove pkt;
+    pkt.size    = sizeof(pkt);
+    pkt.type    = S2C_ITEM_REMOVE;
+    pkt.item_id = item_id;
+    do_send(pkt.size, reinterpret_cast<char*>(&pkt));
+}
+
+void SESSION::send_item_add(ITEM_TYPE item_type, int count)
+{
+    if (!can_send()) return;
+    S2C_ItemAdd pkt;
+    pkt.size      = sizeof(pkt);
+    pkt.type      = S2C_ITEM_ADD;
+    pkt.item_type = item_type;
+    pkt.count     = count;
+    do_send(pkt.size, reinterpret_cast<char*>(&pkt));
+}
+
+void SESSION::send_all_world_items()
+{
+    for (auto& [iid, witem] : g_world_items) {
+        if (!witem || !witem->active) continue;
+        send_item_appear(iid, witem->x, witem->y, witem->item_type);
+    }
+}
+
 static void broadcast_damage(short ax, short ay, int attacker_id, int target_id,
                               short dmg, short target_hp)
 {
@@ -123,6 +175,31 @@ static void broadcast_damage(short ax, short ay, int attacker_id, int target_id,
         if (!is_pc(id)) continue;
         auto obj = get_object(id);
         if (obj) to_player(obj)->send_damage_info(attacker_id, target_id, dmg, target_hp);
+    }
+}
+
+// ── 아이템 헬퍼 ──────────────────────────────────────────────────
+static void spawn_item(short x, short y, ITEM_TYPE type)
+{
+    auto item       = std::make_shared<WorldItem>();
+    item->id        = g_next_item_id++;
+    item->x         = x;
+    item->y         = y;
+    item->item_type = type;
+    g_world_items[item->id] = item;
+    for (int id : sector_manager.get_objects_in_adjacent_sectors(x, y)) {
+        if (!is_pc(id)) continue;
+        auto obj = get_object(id);
+        if (obj) to_player(obj)->send_item_appear(item->id, x, y, type);
+    }
+}
+
+static void broadcast_item_remove(int item_id, short x, short y)
+{
+    for (int id : sector_manager.get_objects_in_adjacent_sectors(x, y)) {
+        if (!is_pc(id)) continue;
+        auto obj = get_object(id);
+        if (obj) to_player(obj)->send_item_remove(item_id);
     }
 }
 
@@ -140,6 +217,9 @@ static void npc_die(int npc_id, CNPC* npc)
     sector_manager.remove_object_from_sector(npc_id, old_x, old_y);
     npc->m_active_npc = false;
     npc->m_target_id  = -1;
+
+    if (rand() % 100 < ITEM_DROP_CHANCE)
+        spawn_item(old_x, old_y, ITEM_HP_POTION);
 
     event_type ev;
     ev.obj_id      = npc_id;
@@ -181,6 +261,7 @@ bool SESSION::process_packet(unsigned char* p)
             sector_manager.add_object_to_sector(m_id, m_x, m_y);
             send_login_success();
             send_avatar_info();
+            send_all_world_items();
             update_player_view(m_id);
             event_type regen_ev;
             regen_ev.obj_id      = m_id;
@@ -336,6 +417,22 @@ bool SESSION::process_packet(unsigned char* p)
         }
         break;
     }
+    case C2S_USE_ITEM:
+    {
+        if (m_state != CS_PLAYING) break;
+        auto* pkt = reinterpret_cast<C2S_UseItem*>(p);
+        if (pkt->item_type == ITEM_HP_POTION && m_potion_count > 0 && m_hp < m_max_hp) {
+            m_potion_count--;
+            m_hp = std::min(m_max_hp, (short)(m_hp + HP_POTION_RESTORE));
+            send_stat_info(m_id, m_hp, m_max_hp, m_level, m_xp, exp_for_next_level());
+            send_item_add(ITEM_HP_POTION, m_potion_count);
+            char sys[MAX_CHAT_LEN];
+            sprintf_s(sys, "HP 포션 사용! HP %d/%d (남은 포션: %d개)",
+                      m_hp, m_max_hp, m_potion_count);
+            send_chat(-1, "System", sys);
+        }
+        break;
+    }
     default:
         cout << "Unknown packet type from player[" << m_id << "].\n";
         return false;
@@ -358,4 +455,19 @@ void SESSION::do_move(DIRECTION dir)
 
     sector_manager.update_object_sector(m_id, old_x, old_y, m_x, m_y);
     update_player_view(m_id);
+
+    // 같은 칸 아이템 자동 획득
+    for (auto& [iid, witem] : g_world_items) {
+        if (!witem || !witem->active) continue;
+        if (witem->x != m_x || witem->y != m_y) continue;
+        bool expected = true;
+        if (witem->active.compare_exchange_strong(expected, false)) {
+            m_potion_count++;
+            broadcast_item_remove(iid, witem->x, witem->y);
+            send_item_add(witem->item_type, m_potion_count);
+            char sys[MAX_CHAT_LEN];
+            sprintf_s(sys, "HP 포션 획득! (보유: %d개) [F]키로 사용", m_potion_count);
+            send_chat(-1, "System", sys);
+        }
+    }
 }

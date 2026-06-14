@@ -45,6 +45,11 @@ static int               g_move_time = 0;
 static std::unordered_map<int, ObjInfo> g_objs;
 static std::mutex g_objs_lock;
 
+struct ItemInfo { int id; short x, y; ITEM_TYPE item_type; };
+static std::unordered_map<int, ItemInfo> g_world_items_cl;
+static std::mutex g_items_lock;
+static int g_potion_count = 0;
+
 static std::deque<std::string> g_msgs;
 static std::mutex              g_msgs_lock;
 constexpr int MAX_MSGS    = 6;
@@ -154,6 +159,15 @@ static void send_skill()
     C2S_Skill p{};
     p.size = sizeof(p);
     p.type = C2S_SKILL;
+    net_send(&p, p.size);
+}
+
+static void send_use_item()
+{
+    C2S_UseItem p{};
+    p.size      = sizeof(p);
+    p.type      = C2S_USE_ITEM;
+    p.item_type = ITEM_HP_POTION;
     net_send(&p, p.size);
 }
 
@@ -270,6 +284,28 @@ static void handle_packet(unsigned char* p)
                 it->second.npc_state = pkt->npc_state;
             }
         }
+        break;
+    }
+    case S2C_ITEM_APPEAR:
+    {
+        auto* pkt = reinterpret_cast<S2C_ItemAppear*>(p);
+        ItemInfo info { pkt->item_id, pkt->x, pkt->y, pkt->item_type };
+        std::lock_guard<std::mutex> lk(g_items_lock);
+        g_world_items_cl[info.id] = info;
+        break;
+    }
+    case S2C_ITEM_REMOVE:
+    {
+        auto* pkt = reinterpret_cast<S2C_ItemRemove*>(p);
+        std::lock_guard<std::mutex> lk(g_items_lock);
+        g_world_items_cl.erase(pkt->item_id);
+        break;
+    }
+    case S2C_ITEM_ADD:
+    {
+        auto* pkt = reinterpret_cast<S2C_ItemAdd*>(p);
+        if (pkt->item_type == ITEM_HP_POTION)
+            g_potion_count = pkt->count;
         break;
     }
     case S2C_DAMAGE_INFO:
@@ -488,6 +524,27 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         }
     }
 
+    // 아이템 렌더링 (오브젝트 아래 레이어)
+    {
+        std::vector<ItemInfo> item_snaps;
+        {
+            std::lock_guard<std::mutex> lk(g_items_lock);
+            item_snaps.reserve(g_world_items_cl.size());
+            for (auto& [id, item] : g_world_items_cl) item_snaps.push_back(item);
+        }
+        sf::CircleShape item_circle(0.24f);
+        item_circle.setFillColor(sf::Color(255, 220, 30));
+        item_circle.setOutlineColor(sf::Color(200, 150, 0));
+        item_circle.setOutlineThickness(0.06f);
+        float vx0 = g_my_x - VSIZE / 2.f, vy0 = g_my_y - VSIZE / 2.f;
+        float vx1 = vx0 + VSIZE,           vy1 = vy0 + VSIZE;
+        for (auto& item : item_snaps) {
+            if (item.x < vx0 || item.x > vx1 || item.y < vy0 || item.y > vy1) continue;
+            item_circle.setPosition(item.x + 0.26f, item.y + 0.26f);
+            win.draw(item_circle);
+        }
+    }
+
     // 오브젝트 스냅샷 (lock 최소화)
     struct Snap { ObjInfo info; };
     std::vector<Snap> snaps;
@@ -683,9 +740,19 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         win.draw(exp_text);
     }
 
+    // 포션 카운트
+    {
+        char pot_buf[32];
+        sprintf_s(pot_buf, "Potion:%d[F]", g_potion_count);
+        sf::Text pot_text(pot_buf, font, 11);
+        pot_text.setFillColor(g_potion_count > 0 ? sf::Color(255, 220, 50) : sf::Color(100, 90, 50));
+        pot_text.setPosition(460.f, ui_top + 4.f);
+        win.draw(pot_text);
+    }
+
     // 조작 힌트
     char hint_buf[128];
-    sprintf_s(hint_buf, "ID:%-5d  X:%-4d Y:%-4d    [Arrow]Move  [A]Attack  [S]Skill  [T]Chat",
+    sprintf_s(hint_buf, "ID:%-5d  X:%-4d Y:%-4d   [Arrow]Move [A]Atk [S]Skill [F]Potion [T]Chat",
               g_my_id, g_my_x, g_my_y);
     sf::Text hint_text(hint_buf, font, 11);
     hint_text.setFillColor(sf::Color(100, 105, 130));
@@ -851,6 +918,9 @@ int main()
                             }
                             break;
                         }
+                        case sf::Keyboard::F:
+                            if (g_potion_count > 0) send_use_item();
+                            break;
                         case sf::Keyboard::T:
                             g_chat_mode = true;
                             g_chat_input.clear();

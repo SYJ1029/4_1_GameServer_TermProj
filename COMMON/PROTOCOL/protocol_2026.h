@@ -10,11 +10,14 @@ constexpr int MAX_NAME_LEN   = 20;
 constexpr int MAX_CHAT_LEN   = 128;
 
 enum PACKET_TYPE {
-    C2S_LOGIN, C2S_MOVE, C2S_CHAT, C2S_ATTACK, C2S_SKILL,
+    C2S_LOGIN, C2S_MOVE, C2S_CHAT, C2S_ATTACK, C2S_SKILL, C2S_USE_ITEM,
     S2C_LOGIN_RESULT, S2C_AVATAR_INFO,
     S2C_ADD_PLAYER, S2C_REMOVE_PLAYER, S2C_MOVE_PLAYER,
-    S2C_CHAT, S2C_STAT_INFO, S2C_DAMAGE_INFO
+    S2C_CHAT, S2C_STAT_INFO, S2C_DAMAGE_INFO,
+    S2C_ITEM_APPEAR, S2C_ITEM_REMOVE, S2C_ITEM_ADD
 };
+
+enum ITEM_TYPE : unsigned char { ITEM_HP_POTION = 1 };
 
 enum DIRECTION { UP, DOWN, LEFT, RIGHT };
 
@@ -132,6 +135,33 @@ struct S2C_DamageInfo {
     int           target_id;
     short         damage;
     short         target_hp;
+};
+
+struct C2S_UseItem {
+    unsigned char size;
+    PACKET_TYPE   type;
+    ITEM_TYPE     item_type;
+};
+
+struct S2C_ItemAppear {
+    unsigned char size;
+    PACKET_TYPE   type;
+    int           item_id;
+    short         x, y;
+    ITEM_TYPE     item_type;
+};
+
+struct S2C_ItemRemove {
+    unsigned char size;
+    PACKET_TYPE   type;
+    int           item_id;
+};
+
+struct S2C_ItemAdd {
+    unsigned char size;
+    PACKET_TYPE   type;
+    ITEM_TYPE     item_type;
+    int           count;   // 현재 보유량
 };
 
 #pragma pack(pop)

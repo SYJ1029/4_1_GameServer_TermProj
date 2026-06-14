@@ -7,6 +7,7 @@ public:
     EXP_OVER  m_recv_over;
     int       m_prev_recv;
     int       m_xp;
+    int       m_potion_count;
     system_clock::time_point m_last_skill_time;
     std::unordered_set<int> m_visible_objects;
     std::mutex              m_visible_mutex;
@@ -14,7 +15,7 @@ public:
     int exp_for_next_level() const { return 100 * (1 << (m_level - 1)); }
 
     SESSION()
-        : m_client(INVALID_SOCKET), m_prev_recv(0), m_xp(0),
+        : m_client(INVALID_SOCKET), m_prev_recv(0), m_xp(0), m_potion_count(0),
           m_last_skill_time(system_clock::now() - seconds(10))
     {
         m_state = CS_FREE;
@@ -22,7 +23,7 @@ public:
     }
 
     SESSION(SOCKET s, int id)
-        : m_client(s), m_prev_recv(0), m_xp(0),
+        : m_client(s), m_prev_recv(0), m_xp(0), m_potion_count(0),
           m_last_skill_time(system_clock::now() - seconds(10))
     {
         m_id      = id;
@@ -96,6 +97,10 @@ public:
     void send_chat(int sender_id, const char* sender_name, const char* msg);
     void send_stat_info(int object_id, short hp, short max_hp, int level = 0, int exp = 0, int exp_next = 0, NPC_STATE npc_state = NPC_STATE_IDLE);
     void send_damage_info(int attacker_id, int target_id, short damage, short target_hp);
+    void send_item_appear(int item_id, short x, short y, ITEM_TYPE item_type);
+    void send_item_remove(int item_id);
+    void send_item_add(ITEM_TYPE item_type, int count);
+    void send_all_world_items();
 
     bool process_packet(unsigned char* p);
     void do_move(DIRECTION dir);
