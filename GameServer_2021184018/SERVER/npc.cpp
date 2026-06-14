@@ -172,7 +172,7 @@ void CNPC::do_chase_move()
 
         if (phase == 3) {
             // Phase 3: 광역 공격 — BOSS_AREA_RANGE 내 모든 플레이어
-            short dmg = BOSS_ATTACK_DMG_P3;
+            short dmg = BOSS_ATTACK_DMG_P3;  // 개별 플레이어 def boost는 아래에서 적용
             for (int id : sector_manager.get_objects_in_adjacent_sectors(m_x, m_y)) {
                 if (!is_pc(id)) continue;
                 auto pobj = get_object(id);
@@ -183,12 +183,14 @@ void CNPC::do_chase_move()
                 int pdy = std::abs(m_y - pl->m_y);
                 if (pdx > BOSS_AREA_RANGE || pdy > BOSS_AREA_RANGE) continue;
 
-                pl->m_hp -= dmg;
+                short actual_dmg = (system_clock::now() < pl->m_def_boost_until)
+                                   ? dmg / 2 : dmg;
+                pl->m_hp -= actual_dmg;
                 short rem = pl->m_hp;
                 for (int vid : sector_manager.get_objects_in_adjacent_sectors(m_x, m_y)) {
                     if (!is_pc(vid)) continue;
                     auto vobj = get_object(vid);
-                    if (vobj) to_player(vobj)->send_damage_info(m_id, id, dmg, rem);
+                    if (vobj) to_player(vobj)->send_damage_info(m_id, id, actual_dmg, rem);
                 }
                 if (rem <= 0) {
                     pl->m_xp = pl->m_xp / 2;
@@ -212,7 +214,9 @@ void CNPC::do_chase_move()
             SESSION* player = to_player(tobj);
             if (!player->can_send()) { m_target_id = -1; return; }
 
-            short dmg     = (phase == 2) ? BOSS_ATTACK_DMG_P2 : BOSS_ATTACK_DMG_P1;
+            short base_dmg = (phase == 2) ? BOSS_ATTACK_DMG_P2 : BOSS_ATTACK_DMG_P1;
+            short dmg = (system_clock::now() < player->m_def_boost_until)
+                        ? base_dmg / 2 : base_dmg;
             player->m_hp -= dmg;
             short remaining = player->m_hp;
 
@@ -250,7 +254,8 @@ void CNPC::do_chase_move()
         SESSION* player = to_player(tobj);
         if (!player->can_send()) { m_target_id = -1; return; }
 
-        short dmg       = NPC_ATTACK_DMG;
+        short dmg = (system_clock::now() < player->m_def_boost_until)
+                    ? NPC_ATTACK_DMG / 2 : NPC_ATTACK_DMG;
         player->m_hp   -= dmg;
         short remaining = player->m_hp;
 
@@ -349,17 +354,20 @@ void process_npc_move(int npc_id)
             }
         }
     } else {
+        // Agro는 감지 거리(AGRO_DETECT_RANGE=10)까지 유지; Peace는 VIEW_RANGE=5
+        int deact_range = (npc->m_npc_type == NPC_AGRO_TYPE) ? AGRO_DETECT_RANGE : VIEW_RANGE;
         for (int id : sector_manager.get_objects_in_adjacent_sectors(npc->m_x, npc->m_y)) {
             if (!is_pc(id)) continue;
             auto pobj = get_object(id);
             if (!pobj) continue;
             SESSION* player = to_player(pobj);
-            if (!player->can_send() || !player->can_see(npc->m_x, npc->m_y)) continue;
+            if (!player->can_send()) continue;
+            int pdx = std::abs(npc->m_x - player->m_x);
+            int pdy = std::abs(npc->m_y - player->m_y);
+            if (pdx > deact_range || pdy > deact_range) continue;
             has_nearby = true;
             if (npc->m_npc_type == NPC_AGRO_TYPE && npc->m_target_id != -1) {
-                int adx = std::abs(npc->m_x - player->m_x);
-                int ady = std::abs(npc->m_y - player->m_y);
-                if (adx <= ATTACK_RANGE && ady <= ATTACK_RANGE)
+                if (pdx <= ATTACK_RANGE && pdy <= ATTACK_RANGE)
                     cooltime = ATTACK_COOL_TIME;
             }
             break;

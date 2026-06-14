@@ -29,7 +29,19 @@ constexpr int QUEST_COUNT   = 2;
 constexpr int QUEST_ID_AGRO = 0;
 constexpr int QUEST_ID_BOSS = 1;
 
-enum ITEM_TYPE : unsigned char { ITEM_HP_POTION = 1 };
+constexpr int ITEM_SLOT_COUNT = 6;
+
+enum ITEM_TYPE : unsigned char {
+    ITEM_NONE        = 0,
+    // 슬롯 1-3: NPC 드롭 아이템
+    ITEM_HP_POTION   = 1,   // HP +30
+    ITEM_HI_POTION   = 2,   // HP +60
+    ITEM_ELIXIR      = 3,   // HP 완전 회복
+    // 슬롯 4-6: 퀘스트 보상 아이템 (30초 버프)
+    ITEM_ATK_BOOST = 4,   // 공격력 강화: 공격 데미지 2배
+    ITEM_DEF_BOOST = 5,   // 방어력 강화: 피해 50% 감소
+    ITEM_SPD_BOOST = 6    // 이동속도 증가: 이동 2칸/키
+};
 
 enum DIRECTION { UP, DOWN, LEFT, RIGHT };
 

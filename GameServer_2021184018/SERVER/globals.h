@@ -64,8 +64,8 @@ constexpr short PC_ATTACK_DMG     = 15;
 constexpr short PC_SKILL_DMG      = 30;   // 3x3 광역기
 constexpr int   SKILL_COOL_TIME   = 3000; // 3초
 constexpr short NPC_ATTACK_DMG    = 8;
-constexpr short HP_POTION_RESTORE = 30;   // 포션 HP 회복량
-constexpr int   ITEM_DROP_CHANCE  = 30;   // NPC 처치 시 포션 드롭 확률 (%)
+constexpr short HP_POTION_RESTORE    = 30;   // HP 포션 회복량
+constexpr short HP_HI_POTION_RESTORE = 60;   // 대형 HP 포션 회복량
 
 // 퀘스트 수치 (DB 연동 시 quest_definitions 테이블로 분리 예정)
 // QUEST_COUNT / QUEST_ID_* 는 protocol_2026.h 에 정의

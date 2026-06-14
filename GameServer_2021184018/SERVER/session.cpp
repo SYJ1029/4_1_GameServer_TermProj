@@ -226,20 +226,32 @@ static void process_quest_kill(SESSION* player, int npc_type_int)
     else if (npc_type_int == NPC_BOSS_TYPE) qid = QUEST_ID_BOSS;
     if (qid < 0) return;
 
+    // 퀘스트 보상 아이템: Agro Slayer→공격력 강화, Boss Hunter→방어력 강화
+    static const ITEM_TYPE reward_items[QUEST_COUNT] = { ITEM_ATK_BOOST, ITEM_DEF_BOOST };
+
     auto& q = player->m_quests[qid];
     if (q.state != Q_ACTIVE) return;
 
     q.kill_count++;
     if (q.kill_count >= targets[qid]) {
-        // 완료 처리
-        q.kill_count = 0;          // 반복 가능 — 나중에 DB에선 state=Q_COMPLETED 후 수령
+        q.kill_count = 0;  // 반복 가능 퀘스트
+
+        // XP 즉시 지급 + 레벨업
         int xp = rewards[qid];
         player->m_xp += xp;
         while (player->m_xp >= player->exp_for_next_level())
             player->m_xp -= player->exp_for_next_level(), ++player->m_level;
 
+        // 보상 아이템 인벤토리에 추가
+        ITEM_TYPE ritem = reward_items[qid];
+        int slot_idx    = (int)ritem - 1;
+        player->m_inventory[slot_idx]++;
+        player->send_item_add(ritem, player->m_inventory[slot_idx]);
+
         char sys[MAX_CHAT_LEN];
-        sprintf_s(sys, "[Quest] %s 완료! +%d XP (Lv.%d)", names[qid], xp, player->m_level);
+        static const char* rnames[QUEST_COUNT] = { "공격력 강화", "방어력 강화" };
+        sprintf_s(sys, "[Quest] %s 완료! +%d XP (Lv.%d) + %s 획득!",
+                  names[qid], xp, player->m_level, rnames[qid]);
         player->send_chat(-1, "System", sys);
         player->send_stat_info(player->m_id, player->m_hp, player->m_max_hp,
                                player->m_level, player->m_xp, player->exp_for_next_level());
@@ -271,8 +283,20 @@ static void npc_die(int npc_id, CNPC* npc)
     npc->m_active_npc = false;
     npc->m_target_id  = -1;
 
-    if (rand() % 100 < ITEM_DROP_CHANCE)
-        spawn_item(old_x, old_y, ITEM_HP_POTION);
+    // NPC 타입별 아이템 드롭 (슬롯 1-3만 세계 아이템으로 소환)
+    {
+        int r = rand() % 100;
+        if (npc->m_npc_type == NPC_BOSS_TYPE) {
+            if      (r < 20) spawn_item(old_x, old_y, ITEM_HP_POTION);
+            else if (r < 40) spawn_item(old_x, old_y, ITEM_HI_POTION);
+            else if (r < 70) spawn_item(old_x, old_y, ITEM_ELIXIR);
+        } else if (npc->m_npc_type == NPC_AGRO_TYPE) {
+            if      (r < 25) spawn_item(old_x, old_y, ITEM_HP_POTION);
+            else if (r < 35) spawn_item(old_x, old_y, ITEM_HI_POTION);
+        } else {
+            if (r < 30) spawn_item(old_x, old_y, ITEM_HP_POTION);
+        }
+    }
 
     event_type ev;
     ev.obj_id      = npc_id;
@@ -285,8 +309,8 @@ static void npc_die(int npc_id, CNPC* npc)
 // 플레이어 사망 처리 (EXP 50% 감소 + 스폰 위치 귀환)
 static void player_die(int player_id, SESSION* player)
 {
-    player->m_xp    = player->m_xp / 2;
-    player->m_hp    = player->m_max_hp;
+    player->m_xp = player->m_xp / 2;
+    player->m_hp = player->m_max_hp;
     short old_x = player->m_x, old_y = player->m_y;
     player->m_x = PC_SPAWN_X;
     player->m_y = PC_SPAWN_Y;
@@ -337,7 +361,9 @@ bool SESSION::process_packet(unsigned char* p)
     {
         C2S_Move* packet = reinterpret_cast<C2S_Move*>(p);
         m_move_time = packet->move_time;
-        do_move(packet->dir);
+        DIRECTION dir = packet->dir;
+        do_move(dir);
+        if (system_clock::now() < m_spd_boost_until) do_move(dir);  // 이동속도 버프: 2칸
         break;
     }
     case C2S_CHAT:
@@ -377,7 +403,7 @@ bool SESSION::process_packet(unsigned char* p)
             if (!is_cardinal) continue;
 
             CNPC* npc  = to_npc(target_obj);
-            short dmg  = PC_ATTACK_DMG;
+            short dmg  = (system_clock::now() < m_atk_boost_until) ? PC_ATTACK_DMG * 2 : PC_ATTACK_DMG;
             npc->m_hp -= dmg;
             short rem  = npc->m_hp;
 
@@ -444,7 +470,7 @@ bool SESSION::process_packet(unsigned char* p)
             if (dx > 1 || dy > 1) continue;
 
             CNPC* npc  = to_npc(target_obj);
-            short dmg  = PC_SKILL_DMG;
+            short dmg  = (system_clock::now() < m_atk_boost_until) ? PC_SKILL_DMG * 2 : PC_SKILL_DMG;
             npc->m_hp -= dmg;
             short rem  = npc->m_hp;
 
@@ -482,15 +508,43 @@ bool SESSION::process_packet(unsigned char* p)
     {
         if (m_state != CS_PLAYING) break;
         auto* pkt = reinterpret_cast<C2S_UseItem*>(p);
-        if (pkt->item_type == ITEM_HP_POTION && m_potion_count > 0 && m_hp < m_max_hp) {
-            m_potion_count--;
-            m_hp = std::min(m_max_hp, (short)(m_hp + HP_POTION_RESTORE));
+        int idx   = (int)pkt->item_type - 1;
+        if (idx < 0 || idx >= ITEM_SLOT_COUNT || m_inventory[idx] <= 0) break;
+
+        char sys[MAX_CHAT_LEN] = "";
+        bool used = false;
+
+        if (pkt->item_type == ITEM_HP_POTION && m_hp < m_max_hp) {
+            m_hp  = std::min(m_max_hp, (short)(m_hp + HP_POTION_RESTORE));
+            sprintf_s(sys, "HP 포션 사용! HP %d/%d", m_hp, m_max_hp);
+            used = true;
+        } else if (pkt->item_type == ITEM_HI_POTION && m_hp < m_max_hp) {
+            m_hp  = std::min(m_max_hp, (short)(m_hp + HP_HI_POTION_RESTORE));
+            sprintf_s(sys, "대형 HP 포션 사용! HP %d/%d", m_hp, m_max_hp);
+            used = true;
+        } else if (pkt->item_type == ITEM_ELIXIR && m_hp < m_max_hp) {
+            m_hp  = m_max_hp;
+            sprintf_s(sys, "엘릭서 사용! HP 완전 회복 (%d/%d)", m_hp, m_max_hp);
+            used = true;
+        } else if (pkt->item_type == ITEM_ATK_BOOST) {
+            m_atk_boost_until = system_clock::now() + seconds(30);
+            sprintf_s(sys, "공격력 강화! 30초간 공격 데미지 2배");
+            used = true;
+        } else if (pkt->item_type == ITEM_DEF_BOOST) {
+            m_def_boost_until = system_clock::now() + seconds(30);
+            sprintf_s(sys, "방어력 강화! 30초간 피해 50%% 감소");
+            used = true;
+        } else if (pkt->item_type == ITEM_SPD_BOOST) {
+            m_spd_boost_until = system_clock::now() + seconds(30);
+            sprintf_s(sys, "이동속도 증가! 30초간 이동 2칸");
+            used = true;
+        }
+
+        if (used) {
+            m_inventory[idx]--;
             send_stat_info(m_id, m_hp, m_max_hp, m_level, m_xp, exp_for_next_level());
-            send_item_add(ITEM_HP_POTION, m_potion_count);
-            char sys[MAX_CHAT_LEN];
-            sprintf_s(sys, "HP 포션 사용! HP %d/%d (남은 포션: %d개)",
-                      m_hp, m_max_hp, m_potion_count);
-            send_chat(-1, "System", sys);
+            send_item_add(pkt->item_type, m_inventory[idx]);
+            if (sys[0]) send_chat(-1, "System", sys);
         }
         break;
     }
@@ -517,17 +571,24 @@ void SESSION::do_move(DIRECTION dir)
     sector_manager.update_object_sector(m_id, old_x, old_y, m_x, m_y);
     update_player_view(m_id);
 
-    // 같은 칸 아이템 자동 획득
+    // 같은 칸 아이템 자동 획득 (슬롯 1-3 월드 아이템)
+    static const char* item_names[ITEM_SLOT_COUNT+1] = {
+        "", "HP 포션", "대형 HP 포션", "엘릭서", "공격력 강화", "방어력 강화", "이동속도 증가"
+    };
     for (auto& [iid, witem] : g_world_items) {
         if (!witem || !witem->active) continue;
         if (witem->x != m_x || witem->y != m_y) continue;
         bool expected = true;
         if (witem->active.compare_exchange_strong(expected, false)) {
-            m_potion_count++;
+            int slot_idx = (int)witem->item_type - 1;
+            m_inventory[slot_idx]++;
             broadcast_item_remove(iid, witem->x, witem->y);
-            send_item_add(witem->item_type, m_potion_count);
+            send_item_add(witem->item_type, m_inventory[slot_idx]);
             char sys[MAX_CHAT_LEN];
-            sprintf_s(sys, "HP 포션 획득! (보유: %d개) [F]키로 사용", m_potion_count);
+            const char* nm = (slot_idx >= 0 && slot_idx < ITEM_SLOT_COUNT)
+                             ? item_names[witem->item_type] : "아이템";
+            sprintf_s(sys, "%s 획득! (보유: %d개) [%d]키로 사용",
+                      nm, m_inventory[slot_idx], (int)witem->item_type);
             send_chat(-1, "System", sys);
         }
     }

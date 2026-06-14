@@ -56,9 +56,14 @@ void disconnect(int key)
 
 	SESSION* cl = to_player(obj);
 
-	if (cl->m_state == CS_PLAYING)
+	if (cl->m_state == CS_PLAYING) {
+		int quest_kill[QUEST_COUNT];
+		for (int i = 0; i < QUEST_COUNT; ++i)
+			quest_kill[i] = cl->m_quests[i].kill_count;
 		db_push_save(key, cl->m_username, cl->m_x, cl->m_y,
-		             cl->m_hp, cl->m_level, cl->m_xp);
+		             cl->m_hp, cl->m_level, cl->m_xp,
+		             cl->m_inventory, quest_kill);
+	}
 
 	cl->m_state = CS_LOGOUT;
 	sector_manager.remove_object_from_sector(key, cl->m_x, cl->m_y);
@@ -237,12 +242,16 @@ void worker_thread()
 				delete exp_over;
 				break;
 			}
-			cl->m_x     = exp_over->m_db_result.x;
-			cl->m_y     = exp_over->m_db_result.y;
-			cl->m_hp    = exp_over->m_db_result.hp;
+			cl->m_x      = exp_over->m_db_result.x;
+			cl->m_y      = exp_over->m_db_result.y;
+			cl->m_hp     = exp_over->m_db_result.hp;
 			cl->m_max_hp = PC_MAX_HP;
-			cl->m_level = exp_over->m_db_result.level;
-			cl->m_xp    = exp_over->m_db_result.exp;
+			cl->m_level  = exp_over->m_db_result.level;
+			cl->m_xp     = exp_over->m_db_result.exp;
+			for (int i = 0; i < ITEM_SLOT_COUNT; ++i)
+				cl->m_inventory[i] = exp_over->m_db_result.inventory[i];
+			for (int i = 0; i < QUEST_COUNT; ++i)
+				cl->m_quests[i].kill_count = exp_over->m_db_result.quest_kill[i];
 			cl->m_state = CS_PLAYING;
 			sector_manager.add_object_to_sector(key, cl->m_x, cl->m_y);
 			cl->send_login_success();

@@ -1,14 +1,6 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="소스 파일">
-      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
-      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
-    </Filter>
-    <Filter Include="헤더 파일">
-      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
-      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
-    </Filter>
     <Filter Include="리소스 파일">
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
@@ -37,10 +29,30 @@
     <Filter Include="SECTOR">
       <UniqueIdentifier>{e49da753-da9f-4fb3-8646-b19de5f7fe68}</UniqueIdentifier>
     </Filter>
+    <Filter Include="DB">
+      <UniqueIdentifier>{59a4bcc1-889e-443b-9e4f-8a763fba5a38}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="SCRIPTS">
+      <UniqueIdentifier>{03f824f8-85e5-4dbb-8eb4-1810b0dcfd10}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="ScriptManager">
+      <UniqueIdentifier>{d68f562d-bed0-4048-b5de-343817b3dde3}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="NetworkModule">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="AI">
+      <UniqueIdentifier>{f2653ba0-a0a9-443d-b7c2-e43af806988f}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="PROTOCOL">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="network.cpp">
-      <Filter>소스 파일</Filter>
+      <Filter>NetworkModule</Filter>
     </ClCompile>
     <ClCompile Include="pch.cpp">
       <Filter>PCH</Filter>
@@ -57,11 +69,14 @@
     <ClCompile Include="GameServer.cpp">
       <Filter>Main</Filter>
     </ClCompile>
+    <ClCompile Include="db.cpp">
+      <Filter>DB</Filter>
+    </ClCompile>
+    <ClCompile Include="lua_manager.cpp">
+      <Filter>ScriptManager</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="server.h">
-      <Filter>헤더 파일</Filter>
-    </ClInclude>
     <ClInclude Include="pch.h">
       <Filter>PCH</Filter>
     </ClInclude>
@@ -80,8 +95,26 @@
     <ClInclude Include="sector.h">
       <Filter>SECTOR</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\COMMON\PROTOCOL\protocol_2026.h">
+      <Filter>PROTOCOL</Filter>
+    </ClInclude>
+    <ClInclude Include="db.h">
+      <Filter>DB</Filter>
+    </ClInclude>
+    <ClInclude Include="lua_manager.h">
+      <Filter>ScriptManager</Filter>
+    </ClInclude>
+    <ClInclude Include="astar.h">
+      <Filter>AI</Filter>
+    </ClInclude>
+    <ClInclude Include="server.h">
+      <Filter>NetworkModule</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="map.lua">
+      <Filter>SCRIPTS</Filter>
+    </None>
   </ItemGroup>
 </Project>

@@ -13,16 +13,19 @@ public:
     EXP_OVER  m_recv_over;
     int       m_prev_recv;
     int       m_xp;
-    int           m_potion_count;
-    QuestProgress m_quests[QUEST_COUNT];   // [QUEST_ID_AGRO], [QUEST_ID_BOSS]
+    int           m_inventory[ITEM_SLOT_COUNT];   // 슬롯 1-6 → 인덱스 0-5
+    QuestProgress m_quests[QUEST_COUNT];           // [QUEST_ID_AGRO], [QUEST_ID_BOSS]
     system_clock::time_point m_last_skill_time;
+    system_clock::time_point m_atk_boost_until;   // 공격력 강화 만료 시각
+    system_clock::time_point m_def_boost_until;   // 방어력 강화 만료 시각
+    system_clock::time_point m_spd_boost_until;   // 이동속도 강화 만료 시각
     std::unordered_set<int> m_visible_objects;
     std::mutex              m_visible_mutex;
 
     int exp_for_next_level() const { return 100 * (1 << (m_level - 1)); }
 
     SESSION()
-        : m_client(INVALID_SOCKET), m_prev_recv(0), m_xp(0), m_potion_count(0),
+        : m_client(INVALID_SOCKET), m_prev_recv(0), m_xp(0), m_inventory{},
           m_last_skill_time(system_clock::now() - seconds(10))
     {
         m_state = CS_FREE;
@@ -30,7 +33,7 @@ public:
     }
 
     SESSION(SOCKET s, int id)
-        : m_client(s), m_prev_recv(0), m_xp(0), m_potion_count(0),
+        : m_client(s), m_prev_recv(0), m_xp(0), m_inventory{},
           m_last_skill_time(system_clock::now() - seconds(10))
     {
         m_id      = id;

@@ -48,7 +48,7 @@ static std::mutex g_objs_lock;
 struct ItemInfo { int id; short x, y; ITEM_TYPE item_type; };
 static std::unordered_map<int, ItemInfo> g_world_items_cl;
 static std::mutex g_items_lock;
-static int g_potion_count = 0;
+static int g_inventory[ITEM_SLOT_COUNT] = {};  // 슬롯 1-6 → 인덱스 0-5
 
 static std::deque<std::string> g_msgs;
 static std::mutex              g_msgs_lock;
@@ -74,8 +74,8 @@ struct QuestClient {
     QUEST_STATE state;
 };
 static QuestClient g_quests[2] = {
-    { "Agro Slayer",  "Agro NPC를 처치하라",  "보상: 500 XP",  0, 10, Q_ACTIVE },
-    { "Boss Hunter",  "보스 몬스터를 처치하라", "보상: 3000 XP", 0,  3, Q_ACTIVE }
+    { "Agro Slayer",  "Agro NPC를 처치하라",  "보상: 500XP + 공격력 강화[4]",  0, 10, Q_ACTIVE },
+    { "Boss Hunter",  "보스 몬스터를 처치하라", "보상: 3000XP + 방어력 강화[5]", 0,  3, Q_ACTIVE }
 };
 static bool g_quest_panel_open = false;
 
@@ -177,12 +177,12 @@ static void send_skill()
     net_send(&p, p.size);
 }
 
-static void send_use_item()
+static void send_use_item(ITEM_TYPE item_type)
 {
     C2S_UseItem p{};
     p.size      = sizeof(p);
     p.type      = C2S_USE_ITEM;
-    p.item_type = ITEM_HP_POTION;
+    p.item_type = item_type;
     net_send(&p, p.size);
 }
 
@@ -319,8 +319,9 @@ static void handle_packet(unsigned char* p)
     case S2C_ITEM_ADD:
     {
         auto* pkt = reinterpret_cast<S2C_ItemAdd*>(p);
-        if (pkt->item_type == ITEM_HP_POTION)
-            g_potion_count = pkt->count;
+        int idx = (int)pkt->item_type - 1;
+        if (idx >= 0 && idx < ITEM_SLOT_COUNT)
+            g_inventory[idx] = pkt->count;
         break;
     }
     case S2C_QUEST_UPDATE:
@@ -557,14 +558,25 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
             item_snaps.reserve(g_world_items_cl.size());
             for (auto& [id, item] : g_world_items_cl) item_snaps.push_back(item);
         }
+        static const sf::Color item_fill_colors[ITEM_SLOT_COUNT+1] = {
+            sf::Color(255,220,30),   // 0=none(unused)
+            sf::Color(220, 60, 60),  // 1=HP 포션 - 빨강
+            sf::Color(220,130, 30),  // 2=대형 HP 포션 - 주황
+            sf::Color(220,200,  0),  // 3=엘릭서 - 금
+            sf::Color( 60,220,220),  // 4=공격력 강화 - 시안 (월드드롭 안 되지만 예비)
+            sf::Color(160, 60,220),  // 5=방어력 강화 - 보라
+            sf::Color( 60,160,255),  // 6=이동속도 - 파랑
+        };
         sf::CircleShape item_circle(0.24f);
-        item_circle.setFillColor(sf::Color(255, 220, 30));
-        item_circle.setOutlineColor(sf::Color(200, 150, 0));
         item_circle.setOutlineThickness(0.06f);
         float vx0 = g_my_x - VSIZE / 2.f, vy0 = g_my_y - VSIZE / 2.f;
         float vx1 = vx0 + VSIZE,           vy1 = vy0 + VSIZE;
         for (auto& item : item_snaps) {
             if (item.x < vx0 || item.x > vx1 || item.y < vy0 || item.y > vy1) continue;
+            int ci = (int)item.item_type;
+            sf::Color fc = (ci >= 1 && ci <= ITEM_SLOT_COUNT) ? item_fill_colors[ci] : item_fill_colors[0];
+            item_circle.setFillColor(fc);
+            item_circle.setOutlineColor(sf::Color(fc.r/2, fc.g/2, fc.b/2));
             item_circle.setPosition(item.x + 0.26f, item.y + 0.26f);
             win.draw(item_circle);
         }
@@ -659,8 +671,68 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         }
     }
 
-    // 픽셀 뷰로 전환해서 이름 레이블 출력
+    // 픽셀 뷰로 전환
     win.setView(win.getDefaultView());
+
+    // ── 인벤토리 (좌상단 오버레이) ──────────────────────────────────
+    {
+        static const sf::Color slot_col[ITEM_SLOT_COUNT] = {
+            sf::Color(180, 50,  50),  // 1 HP 포션
+            sf::Color(200,110,  30),  // 2 대형 HP 포션
+            sf::Color(190,160,  10),  // 3 엘릭서
+            sf::Color( 30,190,190),   // 4 공격력 강화
+            sf::Color(130, 40,200),   // 5 방어력 강화
+            sf::Color( 40,130,230),   // 6 이동속도 증가
+        };
+        static const char* slot_label[ITEM_SLOT_COUNT] = {
+            "HP", "Hi", "Elx", "ATK", "DEF", "SPD"
+        };
+        constexpr float SW = 72.f, SH = 22.f, SG = 3.f;
+        constexpr float INV_X = 5.f, INV_Y = 5.f;
+
+        // 반투명 배경
+        float bg_w = 3.f * (SW + SG) - SG + 4.f;
+        float bg_h = 2.f * (SH + 3.f) - 3.f + 4.f;
+        sf::RectangleShape inv_bg({ bg_w, bg_h });
+        inv_bg.setFillColor(sf::Color(8, 8, 20, 180));
+        inv_bg.setPosition(INV_X - 2.f, INV_Y - 2.f);
+        win.draw(inv_bg);
+
+        sf::Text st("", font, 9);
+        for (int s = 0; s < ITEM_SLOT_COUNT; ++s) {
+            int row = s / 3, col = s % 3;
+            float sx = INV_X + col * (SW + SG);
+            float sy = INV_Y + row * (SH + 3.f);
+
+            int cnt = g_inventory[s];
+            sf::Color base = slot_col[s];
+            sf::Color fill = (cnt > 0)
+                ? sf::Color(base.r, base.g, base.b, 200)
+                : sf::Color(base.r/5, base.g/5, base.b/5, 160);
+
+            sf::RectangleShape slot({ SW, SH });
+            slot.setFillColor(fill);
+            slot.setOutlineColor(sf::Color(140, 140, 170, 160));
+            slot.setOutlineThickness(0.8f);
+            slot.setPosition(sx, sy);
+            win.draw(slot);
+
+            char lbuf[12];
+            sprintf_s(lbuf, "[%d]%s", s + 1, slot_label[s]);
+            st.setString(lbuf);
+            st.setFillColor(cnt > 0 ? sf::Color(255,255,255) : sf::Color(110,110,110));
+            st.setPosition(sx + 2.f, sy + 2.f);
+            win.draw(st);
+
+            char cbuf[8];
+            sprintf_s(cbuf, "x%d", cnt);
+            st.setString(cbuf);
+            st.setFillColor(cnt > 0 ? sf::Color(255,240,80) : sf::Color(70,70,70));
+            float tw = st.getLocalBounds().width;
+            st.setPosition(sx + SW - tw - 3.f, sy + 11.f);
+            win.draw(st);
+        }
+    }
 
     sf::Text lbl("", font, 11);
     for (auto& s : snaps) {
@@ -834,7 +906,7 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
     float ui_top  = (float)(WIN_H - UI_H);
     float chat_y  = (float)WIN_H - CHAT_BOX_H - CHAT_BOX_B;   // 채팅창 Y (패널 하단 고정)
     float msg_end = chat_y - 4.f;                               // 메시지가 올라올 수 있는 최하단
-    float msg_start = ui_top + 36.f;                            // 메시지 최상단 (HP/힌트 아래)
+    float msg_start = ui_top + 34.f;                            // 메시지 최상단 (HP바/힌트 아래)
 
     sf::RectangleShape ui_bg(sf::Vector2f((float)WIN_W, (float)UI_H));
     ui_bg.setPosition(0.f, ui_top);
@@ -900,23 +972,13 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         win.draw(exp_text);
     }
 
-    // 포션 카운트
-    {
-        char pot_buf[32];
-        sprintf_s(pot_buf, "Potion:%d[F]", g_potion_count);
-        sf::Text pot_text(pot_buf, font, 11);
-        pot_text.setFillColor(g_potion_count > 0 ? sf::Color(255, 220, 50) : sf::Color(100, 90, 50));
-        pot_text.setPosition(460.f, ui_top + 4.f);
-        win.draw(pot_text);
-    }
-
     // 조작 힌트
     char hint_buf[128];
-    sprintf_s(hint_buf, "ID:%-4d X:%-4d Y:%-4d  [Arrow]Move [A]Atk [S]Skill [F]Pot [Q]Quest [T]Chat",
+    sprintf_s(hint_buf, "ID:%-4d X:%-4d Y:%-4d  [Arrow]Move [A]Atk [S]Skill [1-6]Item [Q]Quest [T]Chat",
               g_my_id, g_my_x, g_my_y);
     sf::Text hint_text(hint_buf, font, 11);
     hint_text.setFillColor(sf::Color(100, 105, 130));
-    hint_text.setPosition(10.f, ui_top + 19.f);
+    hint_text.setPosition(10.f, ui_top + 20.f);
     win.draw(hint_text);
 
     // 스킬 쿨타임 바
@@ -926,7 +988,7 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
             now_sk - g_last_skill_time).count();
         float sk_ratio = std::min(1.f, (float)elapsed_sk / SKILL_CD_MS);
 
-        constexpr float SK_X = 350.f, SK_W = 100.f;
+        constexpr float SK_X = 346.f, SK_W = 186.f;
         sf::RectangleShape skBg({ SK_W, 11.f });
         skBg.setFillColor(sf::Color(30, 20, 50));
         skBg.setPosition(SK_X, ui_top + 5.f);
@@ -1078,9 +1140,18 @@ int main()
                             }
                             break;
                         }
-                        case sf::Keyboard::F:
-                            if (g_potion_count > 0) send_use_item();
-                            break;
+                        case sf::Keyboard::Num1:
+                            if (g_inventory[0] > 0) send_use_item(ITEM_HP_POTION);  break;
+                        case sf::Keyboard::Num2:
+                            if (g_inventory[1] > 0) send_use_item(ITEM_HI_POTION);  break;
+                        case sf::Keyboard::Num3:
+                            if (g_inventory[2] > 0) send_use_item(ITEM_ELIXIR);     break;
+                        case sf::Keyboard::Num4:
+                            if (g_inventory[3] > 0) send_use_item(ITEM_ATK_BOOST);  break;
+                        case sf::Keyboard::Num5:
+                            if (g_inventory[4] > 0) send_use_item(ITEM_DEF_BOOST);  break;
+                        case sf::Keyboard::Num6:
+                            if (g_inventory[5] > 0) send_use_item(ITEM_SPD_BOOST);  break;
                         case sf::Keyboard::Q:
                             g_quest_panel_open = !g_quest_panel_open;
                             break;
