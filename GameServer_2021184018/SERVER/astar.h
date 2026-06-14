@@ -12,7 +12,7 @@ inline std::pair<short,short> astar_next_step(short sx, short sy, short tx, shor
 {
     if (sx == tx && sy == ty) return { sx, sy };
 
-    constexpr int MARGIN = 4;
+    constexpr int MARGIN = 20;
 
     int x0 = std::max(0,             std::min((int)sx,(int)tx) - MARGIN);
     int y0 = std::max(0,             std::min((int)sy,(int)ty) - MARGIN);

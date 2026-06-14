@@ -144,7 +144,8 @@ static void npc_die(int npc_id, CNPC* npc)
     event_type ev;
     ev.obj_id      = npc_id;
     ev.event_id    = EVENT_NPC_RESPAWN;
-    ev.wakeup_time = system_clock::now() + milliseconds(NPC_RESPAWN_TIME);
+    int respawn_ms = (npc->m_npc_type == NPC_BOSS_TYPE) ? BOSS_RESPAWN_TIME : NPC_RESPAWN_TIME;
+    ev.wakeup_time = system_clock::now() + milliseconds(respawn_ms);
     timer_queue.push(ev);
 }
 
@@ -250,7 +251,8 @@ bool SESSION::process_packet(unsigned char* p)
             if (rem <= 0) {
                 // EXP 계산: 레벨^2 * 2, Agro=2배(로밍), Peace=1배(고정)
                 int xp_gain = npc->m_level * npc->m_level * 2;
-                if (npc->m_npc_type == NPC_AGRO_TYPE) xp_gain *= 2; // Agro = 로밍 2배
+                if      (npc->m_npc_type == NPC_BOSS_TYPE) xp_gain *= 10; // 보스 = 10배
+                else if (npc->m_npc_type == NPC_AGRO_TYPE) xp_gain *= 2;  // Agro = 2배
 
                 npc_die(obj_id, npc);
 
@@ -270,6 +272,62 @@ bool SESSION::process_packet(unsigned char* p)
             }
             else {
                 // 피격 시 모든 NPC 타입이 CHASE로 전환 (Peace도 반격 추적)
+                npc->m_target_id  = m_id;
+                npc->m_move_state = NPC_STATE_CHASE;
+                broadcast_npc_state(obj_id, npc);
+                npc->wake_up();
+            }
+        }
+        break;
+    }
+    case C2S_SKILL:
+    {
+        if (m_state != CS_PLAYING) break;
+
+        auto now = system_clock::now();
+        if (duration_cast<milliseconds>(now - m_last_skill_time).count() < SKILL_COOL_TIME) break;
+        m_last_skill_time = now;
+
+        // 3x3 범위 (체비쇼프 거리 1) 내 모든 NPC 피격
+        std::vector<int> visibles;
+        {
+            std::lock_guard<std::mutex> lock(m_visible_mutex);
+            visibles.assign(m_visible_objects.begin(), m_visible_objects.end());
+        }
+
+        for (int obj_id : visibles) {
+            if (!is_npc(obj_id)) continue;
+            auto target_obj = get_object(obj_id);
+            if (!target_obj || target_obj->m_state != CS_PLAYING || target_obj->m_hp <= 0) continue;
+
+            int dx = std::abs(target_obj->m_x - m_x);
+            int dy = std::abs(target_obj->m_y - m_y);
+            if (dx > 1 || dy > 1) continue;
+
+            CNPC* npc  = to_npc(target_obj);
+            short dmg  = PC_SKILL_DMG;
+            npc->m_hp -= dmg;
+            short rem  = npc->m_hp;
+
+            broadcast_damage(m_x, m_y, m_id, obj_id, dmg, rem);
+
+            if (rem <= 0) {
+                int xp_gain = npc->m_level * npc->m_level * 2;
+                if      (npc->m_npc_type == NPC_BOSS_TYPE) xp_gain *= 10;
+                else if (npc->m_npc_type == NPC_AGRO_TYPE) xp_gain *= 2;
+
+                npc_die(obj_id, npc);
+
+                m_xp += xp_gain;
+                while (m_xp >= exp_for_next_level())
+                    m_xp -= exp_for_next_level(), ++m_level;
+
+                char sys_msg[MAX_CHAT_LEN];
+                sprintf_s(sys_msg, "[Skill] %s 처치! +%d XP (Lv.%d, XP:%d/%d)",
+                          npc->m_username, xp_gain, m_level, m_xp, exp_for_next_level());
+                send_chat(-1, "System", sys_msg);
+                send_stat_info(m_id, m_hp, m_max_hp, m_level, m_xp, exp_for_next_level());
+            } else {
                 npc->m_target_id  = m_id;
                 npc->m_move_state = NPC_STATE_CHASE;
                 broadcast_npc_state(obj_id, npc);

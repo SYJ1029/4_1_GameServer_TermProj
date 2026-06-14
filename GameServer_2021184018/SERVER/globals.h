@@ -41,6 +41,19 @@ constexpr short PC_SPAWN_Y = 100;
 constexpr int NPC_PEACE_LEVEL = 1;
 constexpr int NPC_AGRO_LEVEL  = 2;
 
+// 보스 수치
+constexpr int   BOSS_COUNT          = 10;
+constexpr int   BOSS_LEVEL          = 20;
+constexpr short BOSS_MAX_HP         = 500;
+constexpr short BOSS_ATTACK_DMG_P1  = 20;   // Phase 1 (HP > 66%)
+constexpr short BOSS_ATTACK_DMG_P2  = 30;   // Phase 2 (HP 33~66%)
+constexpr short BOSS_ATTACK_DMG_P3  = 45;   // Phase 3 (HP < 33%, 광역)
+constexpr int   BOSS_DETECT_RANGE   = 15;
+constexpr int   BOSS_ATTACK_RANGE   = 2;
+constexpr int   BOSS_AREA_RANGE     = 3;    // Phase 3 광역 공격 반경
+constexpr int   BOSS_MOVE_P2        = 250;  // Phase 2/3 이동 인터벌(ms)
+constexpr int   BOSS_RESPAWN_TIME   = 120000; // 보스 부활 2분
+
 // 전투 수치
 constexpr int   ATTACK_RANGE      = 1;   // 공격 가능 거리 (체비쇼프)
 constexpr int   AGRO_DETECT_RANGE = 10;  // 어그로 감지 거리
@@ -48,6 +61,8 @@ constexpr short PC_MAX_HP         = 100;
 constexpr short NPC_PEACE_MAX_HP  = 30;
 constexpr short NPC_AGRO_MAX_HP   = 80;
 constexpr short PC_ATTACK_DMG     = 15;
+constexpr short PC_SKILL_DMG      = 30;   // 3x3 광역기
+constexpr int   SKILL_COOL_TIME   = 3000; // 3초
 constexpr short NPC_ATTACK_DMG    = 8;
 
 constexpr int SECTOR_SIZE = VIEW_RANGE * 2 + 1;

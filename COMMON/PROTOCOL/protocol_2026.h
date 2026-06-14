@@ -10,7 +10,7 @@ constexpr int MAX_NAME_LEN   = 20;
 constexpr int MAX_CHAT_LEN   = 128;
 
 enum PACKET_TYPE {
-    C2S_LOGIN, C2S_MOVE, C2S_CHAT, C2S_ATTACK,
+    C2S_LOGIN, C2S_MOVE, C2S_CHAT, C2S_ATTACK, C2S_SKILL,
     S2C_LOGIN_RESULT, S2C_AVATAR_INFO,
     S2C_ADD_PLAYER, S2C_REMOVE_PLAYER, S2C_MOVE_PLAYER,
     S2C_CHAT, S2C_STAT_INFO, S2C_DAMAGE_INFO
@@ -19,7 +19,7 @@ enum PACKET_TYPE {
 enum DIRECTION { UP, DOWN, LEFT, RIGHT };
 
 // NPC 타입 (클라이언트/프로토콜용)
-enum NPC_KIND  : unsigned char { NPC_PC = 0, NPC_PEACE = 1, NPC_AGRO = 2 };
+enum NPC_KIND  : unsigned char { NPC_PC = 0, NPC_PEACE = 1, NPC_AGRO = 2, NPC_BOSS = 3 };
 
 // NPC 이동 상태 (서버 내부 + 프로토콜 공유)
 enum NPC_STATE : unsigned char { NPC_STATE_IDLE = 0, NPC_STATE_ROAMING = 1, NPC_STATE_CHASE = 2 };
@@ -47,6 +47,11 @@ struct C2S_Chat {
 };
 
 struct C2S_Attack {
+    unsigned char size;
+    PACKET_TYPE   type;
+};
+
+struct C2S_Skill {
     unsigned char size;
     PACKET_TYPE   type;
 };

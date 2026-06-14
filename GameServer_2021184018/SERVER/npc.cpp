@@ -56,8 +56,9 @@ void CNPC::update_viewers(short old_x, short old_y)
 
 void CNPC::do_roaming_move()
 {
-    // Agro NPC: 주변 플레이어 감지 시 즉시 CHASE 전환
-    if (m_npc_type == NPC_AGRO_TYPE) {
+    // Agro/Boss: 주변 플레이어 감지 시 즉시 CHASE 전환
+    if (m_npc_type == NPC_AGRO_TYPE || m_npc_type == NPC_BOSS_TYPE) {
+        int detect = (m_npc_type == NPC_BOSS_TYPE) ? BOSS_DETECT_RANGE : AGRO_DETECT_RANGE;
         int min_dist = INT_MAX;
         for (int id : sector_manager.get_objects_in_adjacent_sectors(m_x, m_y)) {
             if (!is_pc(id)) continue;
@@ -67,7 +68,7 @@ void CNPC::do_roaming_move()
             if (!player->can_send()) continue;
             int dx = std::abs(m_x - obj->m_x);
             int dy = std::abs(m_y - obj->m_y);
-            if (dx > AGRO_DETECT_RANGE || dy > AGRO_DETECT_RANGE) continue;
+            if (dx > detect || dy > detect) continue;
             int dist = dx + dy;
             if (dist < min_dist) { min_dist = dist; m_target_id = id; }
         }
@@ -113,6 +114,8 @@ void CNPC::do_roaming_move()
 
 void CNPC::do_chase_move()
 {
+    int detect_range = (m_npc_type == NPC_BOSS_TYPE) ? BOSS_DETECT_RANGE : AGRO_DETECT_RANGE;
+
     // 타겟 유효성 확인
     if (m_target_id != -1) {
         auto tobj = get_object(m_target_id);
@@ -121,13 +124,13 @@ void CNPC::do_chase_move()
         } else {
             int dx = std::abs(m_x - tobj->m_x);
             int dy = std::abs(m_y - tobj->m_y);
-            if (dx > AGRO_DETECT_RANGE || dy > AGRO_DETECT_RANGE)
+            if (dx > detect_range || dy > detect_range)
                 m_target_id = -1;
         }
     }
 
-    // Agro만 주변 스캔으로 새 타겟 탐색, Peace는 공격받은 대상만 추적
-    if (m_target_id == -1 && m_npc_type == NPC_AGRO_TYPE) {
+    // Agro/Boss: 주변 스캔으로 새 타겟 탐색, Peace: 공격받은 대상만 추적
+    if (m_target_id == -1 && m_npc_type != NPC_PEACE_TYPE) {
         int min_dist = INT_MAX;
         for (int id : sector_manager.get_objects_in_adjacent_sectors(m_x, m_y)) {
             if (!is_pc(id)) continue;
@@ -137,7 +140,7 @@ void CNPC::do_chase_move()
             if (!player->can_send()) continue;
             int dx = std::abs(m_x - obj->m_x);
             int dy = std::abs(m_y - obj->m_y);
-            if (dx > AGRO_DETECT_RANGE || dy > AGRO_DETECT_RANGE) continue;
+            if (dx > detect_range || dy > detect_range) continue;
             int dist = dx + dy;
             if (dist < min_dist) { min_dist = dist; m_target_id = id; }
         }
@@ -145,16 +148,16 @@ void CNPC::do_chase_move()
 
     // 타겟 없음 → 원래 상태로 복귀
     if (m_target_id == -1) {
-        m_move_state = (m_npc_type == NPC_AGRO_TYPE) ? NPC_STATE_ROAMING : NPC_STATE_IDLE;
+        m_move_state = (m_npc_type == NPC_PEACE_TYPE) ? NPC_STATE_IDLE : NPC_STATE_ROAMING;
         broadcast_npc_state(m_id, this);
-        if (m_npc_type == NPC_AGRO_TYPE) do_roaming_move();
+        if (m_npc_type != NPC_PEACE_TYPE) do_roaming_move();
         return;
     }
 
     auto tobj = get_object(m_target_id);
     if (!tobj) {
         m_target_id  = -1;
-        m_move_state = (m_npc_type == NPC_AGRO_TYPE) ? NPC_STATE_ROAMING : NPC_STATE_IDLE;
+        m_move_state = (m_npc_type == NPC_PEACE_TYPE) ? NPC_STATE_IDLE : NPC_STATE_ROAMING;
         broadcast_npc_state(m_id, this);
         return;
     }
@@ -163,8 +166,87 @@ void CNPC::do_chase_move()
     int dx = std::abs(m_x - tx);
     int dy = std::abs(m_y - ty);
 
-    // 인접: 공격
-    if (dx <= ATTACK_RANGE && dy <= ATTACK_RANGE) {
+    // ── 보스 전용 공격 ──────────────────────────────────────────────
+    if (m_npc_type == NPC_BOSS_TYPE && dx <= BOSS_ATTACK_RANGE && dy <= BOSS_ATTACK_RANGE) {
+        int phase = get_boss_phase();
+
+        if (phase == 3) {
+            // Phase 3: 광역 공격 — BOSS_AREA_RANGE 내 모든 플레이어
+            short dmg = BOSS_ATTACK_DMG_P3;
+            for (int id : sector_manager.get_objects_in_adjacent_sectors(m_x, m_y)) {
+                if (!is_pc(id)) continue;
+                auto pobj = get_object(id);
+                if (!pobj || pobj->m_state != CS_PLAYING) continue;
+                SESSION* pl = to_player(pobj);
+                if (!pl->can_send()) continue;
+                int pdx = std::abs(m_x - pl->m_x);
+                int pdy = std::abs(m_y - pl->m_y);
+                if (pdx > BOSS_AREA_RANGE || pdy > BOSS_AREA_RANGE) continue;
+
+                pl->m_hp -= dmg;
+                short rem = pl->m_hp;
+                for (int vid : sector_manager.get_objects_in_adjacent_sectors(m_x, m_y)) {
+                    if (!is_pc(vid)) continue;
+                    auto vobj = get_object(vid);
+                    if (vobj) to_player(vobj)->send_damage_info(m_id, id, dmg, rem);
+                }
+                if (rem <= 0) {
+                    pl->m_xp = pl->m_xp / 2;
+                    pl->m_hp = pl->m_max_hp;
+                    short opx = pl->m_x, opy = pl->m_y;
+                    pl->m_x = PC_SPAWN_X;
+                    pl->m_y = PC_SPAWN_Y;
+                    sector_manager.update_object_sector(id, opx, opy, pl->m_x, pl->m_y);
+                    pl->send_avatar_info();
+                    pl->send_stat_info(id, pl->m_hp, pl->m_max_hp,
+                                       pl->m_level, pl->m_xp, pl->exp_for_next_level());
+                    update_player_view(id);
+                    if (id == m_target_id) m_target_id = -1;
+                } else {
+                    pl->send_stat_info(id, rem, pl->m_max_hp,
+                                       pl->m_level, pl->m_xp, pl->exp_for_next_level());
+                }
+            }
+        } else {
+            // Phase 1/2: 단일 타겟 공격
+            SESSION* player = to_player(tobj);
+            if (!player->can_send()) { m_target_id = -1; return; }
+
+            short dmg     = (phase == 2) ? BOSS_ATTACK_DMG_P2 : BOSS_ATTACK_DMG_P1;
+            player->m_hp -= dmg;
+            short remaining = player->m_hp;
+
+            for (int id : sector_manager.get_objects_in_adjacent_sectors(m_x, m_y)) {
+                if (!is_pc(id)) continue;
+                auto obj = get_object(id);
+                if (obj) to_player(obj)->send_damage_info(m_id, m_target_id, dmg, remaining);
+            }
+
+            if (remaining <= 0) {
+                player->m_xp = player->m_xp / 2;
+                player->m_hp = player->m_max_hp;
+                short old_px = player->m_x, old_py = player->m_y;
+                player->m_x = PC_SPAWN_X;
+                player->m_y = PC_SPAWN_Y;
+                sector_manager.update_object_sector(m_target_id, old_px, old_py,
+                                                    player->m_x, player->m_y);
+                player->send_avatar_info();
+                player->send_stat_info(m_target_id, player->m_hp, player->m_max_hp,
+                                       player->m_level, player->m_xp,
+                                       player->exp_for_next_level());
+                update_player_view(m_target_id);
+                m_target_id = -1;
+            } else {
+                player->send_stat_info(m_target_id, remaining, player->m_max_hp,
+                                       player->m_level, player->m_xp,
+                                       player->exp_for_next_level());
+            }
+        }
+        return;
+    }
+
+    // ── Agro/Peace 기존 공격 (ATTACK_RANGE=1) ──────────────────────
+    if (m_npc_type != NPC_BOSS_TYPE && dx <= ATTACK_RANGE && dy <= ATTACK_RANGE) {
         SESSION* player = to_player(tobj);
         if (!player->can_send()) { m_target_id = -1; return; }
 
@@ -241,20 +323,47 @@ void process_npc_move(int npc_id)
     bool has_nearby = false;
     int cooltime = MOVE_COOL_TIME;
 
-    for (int id : sector_manager.get_objects_in_adjacent_sectors(npc->m_x, npc->m_y)) {
-        if (!is_pc(id)) continue;
-        auto pobj = get_object(id);
-        if (!pobj) continue;
-        SESSION* player = to_player(pobj);
-        if (!player->can_send() || !player->can_see(npc->m_x, npc->m_y)) continue;
-        has_nearby = true;
-        if (npc->m_npc_type == NPC_AGRO_TYPE && npc->m_target_id != -1) {
-            int adx = std::abs(npc->m_x - player->m_x);
-            int ady = std::abs(npc->m_y - player->m_y);
-            if (adx <= ATTACK_RANGE && ady <= ATTACK_RANGE)
-                cooltime = ATTACK_COOL_TIME;
+    if (npc->m_npc_type == NPC_BOSS_TYPE) {
+        // 보스: 페이즈 기반 쿨타임
+        int phase = npc->get_boss_phase();
+        cooltime  = (phase >= 2) ? BOSS_MOVE_P2 : MOVE_COOL_TIME;
+        if (npc->m_target_id != -1) {
+            auto tobj = get_object(npc->m_target_id);
+            if (tobj && tobj->m_state == CS_PLAYING &&
+                std::abs(npc->m_x - tobj->m_x) <= BOSS_DETECT_RANGE &&
+                std::abs(npc->m_y - tobj->m_y) <= BOSS_DETECT_RANGE) {
+                has_nearby = true;
+                int adx = std::abs(npc->m_x - tobj->m_x);
+                int ady = std::abs(npc->m_y - tobj->m_y);
+                if (adx <= BOSS_ATTACK_RANGE && ady <= BOSS_ATTACK_RANGE)
+                    cooltime = (phase == 3) ? 600 : (phase == 2) ? 750 : ATTACK_COOL_TIME;
+            }
         }
-        break;
+        if (!has_nearby) {
+            for (int id : sector_manager.get_objects_in_adjacent_sectors(npc->m_x, npc->m_y)) {
+                if (!is_pc(id)) continue;
+                auto pobj = get_object(id);
+                if (!pobj || !to_player(pobj)->can_send()) continue;
+                has_nearby = true;
+                break;
+            }
+        }
+    } else {
+        for (int id : sector_manager.get_objects_in_adjacent_sectors(npc->m_x, npc->m_y)) {
+            if (!is_pc(id)) continue;
+            auto pobj = get_object(id);
+            if (!pobj) continue;
+            SESSION* player = to_player(pobj);
+            if (!player->can_send() || !player->can_see(npc->m_x, npc->m_y)) continue;
+            has_nearby = true;
+            if (npc->m_npc_type == NPC_AGRO_TYPE && npc->m_target_id != -1) {
+                int adx = std::abs(npc->m_x - player->m_x);
+                int ady = std::abs(npc->m_y - player->m_y);
+                if (adx <= ATTACK_RANGE && ady <= ATTACK_RANGE)
+                    cooltime = ATTACK_COOL_TIME;
+            }
+            break;
+        }
     }
 
     if (has_nearby) {
@@ -277,11 +386,17 @@ void process_npc_respawn(int npc_id)
     CNPC* npc    = to_npc(obj);
     npc->m_hp         = npc->m_max_hp;
     npc->m_target_id  = -1;
-    npc->m_move_state = (npc->m_npc_type == NPC_AGRO_TYPE) ? NPC_STATE_ROAMING : NPC_STATE_IDLE;
-    npc->m_x          = static_cast<short>(rand() % WORLD_WIDTH);
-    npc->m_y          = static_cast<short>(rand() % WORLD_HEIGHT);
-    npc->m_origin_x   = npc->m_x;
-    npc->m_origin_y   = npc->m_y;
+    npc->m_move_state = (npc->m_npc_type == NPC_PEACE_TYPE) ? NPC_STATE_IDLE : NPC_STATE_ROAMING;
+    if (npc->m_npc_type == NPC_BOSS_TYPE) {
+        // 보스: 고정 스폰 위치로 완전 회복 부활
+        npc->m_x = npc->m_origin_x;
+        npc->m_y = npc->m_origin_y;
+    } else {
+        npc->m_x        = static_cast<short>(rand() % WORLD_WIDTH);
+        npc->m_y        = static_cast<short>(rand() % WORLD_HEIGHT);
+        npc->m_origin_x = npc->m_x;
+        npc->m_origin_y = npc->m_y;
+    }
     sector_manager.add_object_to_sector(npc_id, npc->m_x, npc->m_y);
     // wake_up은 플레이어가 근처에 왔을 때 자동으로 호출됨
 }
@@ -292,6 +407,33 @@ void InitializeNPC()
 
     int npc_id = NPC_ID_START;
     int total   = 0;
+
+    // 보스 NPC 배치 (맵 전역에 격자 형태로 고정 스폰)
+    static const short BOSS_SPAWN_X[BOSS_COUNT] = { 200, 600, 1000, 1400, 1800,
+                                                     200, 600, 1000, 1400, 1800 };
+    static const short BOSS_SPAWN_Y[BOSS_COUNT] = { 300, 300,  300,  300,  300,
+                                                    1700,1700, 1700, 1700, 1700 };
+    for (int i = 0; i < BOSS_COUNT && total < MAX_NPCS; ++i, ++npc_id, ++total) {
+        auto npc = std::make_shared<CNPC>();
+        npc->m_id = npc_id;
+
+        // 장애물 회피: 원하는 위치 주변 탐색
+        short bx = BOSS_SPAWN_X[i], by = BOSS_SPAWN_Y[i];
+        for (int tries = 0; is_obstacle(bx, by) && tries < 50; ++tries)
+            bx = BOSS_SPAWN_X[i] + (short)(rand() % 21 - 10),
+            by = BOSS_SPAWN_Y[i] + (short)(rand() % 21 - 10);
+
+        npc->m_x = npc->m_origin_x = bx;
+        npc->m_y = npc->m_origin_y = by;
+        npc->m_npc_type   = NPC_BOSS_TYPE;
+        npc->m_move_state = NPC_STATE_ROAMING;
+        npc->m_level      = BOSS_LEVEL;
+        npc->m_hp = npc->m_max_hp = BOSS_MAX_HP;
+        sprintf_s(npc->m_username, "Boss_%d", i + 1);
+        clients[npc_id] = npc;
+        sector_manager.add_object_to_sector(npc_id, bx, by);
+    }
+    cout << BOSS_COUNT << " boss(es) spawned.\n";
 
     // Lua 스크립트에 스폰 그룹이 정의된 경우 해당 기준으로 배치
     if (!g_npc_groups.empty()) {

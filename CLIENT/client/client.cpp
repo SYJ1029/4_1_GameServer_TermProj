@@ -54,6 +54,19 @@ constexpr int MSG_LINE_H  = 15;   // 메시지 한 줄 높이 (px)
 static bool        g_chat_mode  = false;
 static std::string g_chat_input;
 
+// ── 스킬 쿨타임 ───────────────────────────────────────────────────
+constexpr int SKILL_CD_MS = 3000;
+static std::chrono::steady_clock::time_point g_last_skill_time =
+    std::chrono::steady_clock::now() - std::chrono::seconds(10);
+
+// ── 공격 이펙트 ───────────────────────────────────────────────────
+enum class EffectType { NONE, ATTACK, SKILL };
+struct VisualEffect {
+    EffectType type  = EffectType::NONE;
+    std::chrono::steady_clock::time_point start;
+};
+static VisualEffect g_effect;
+
 // ── 장애물 ────────────────────────────────────────────────────────
 struct ObstacleRect { short x, y, w, h; };
 static std::vector<ObstacleRect> g_obstacles;
@@ -133,6 +146,14 @@ static void send_attack()
     C2S_Attack p{};
     p.size = sizeof(p);
     p.type = C2S_ATTACK;
+    net_send(&p, p.size);
+}
+
+static void send_skill()
+{
+    C2S_Skill p{};
+    p.size = sizeof(p);
+    p.type = C2S_SKILL;
     net_send(&p, p.size);
 }
 
@@ -476,14 +497,32 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         for (auto& [id, o] : g_objs) snaps.push_back({ o });
     }
 
-    // 오브젝트 사각형 + HP 바 (월드 뷰)
+    // 오브젝트 렌더링: 보스=원, 나머지=사각형
     sf::RectangleShape obj_rect(sf::Vector2f(0.84f, 0.84f));
+    sf::CircleShape boss_circle(0.46f);
+    boss_circle.setOutlineThickness(0.07f);
+    boss_circle.setOutlineColor(sf::Color(255, 230, 80));
+
     for (auto& s : snaps) {
+        if (s.info.npc_type == NPC_BOSS) {
+            // 페이즈별 색상: 금색(P1) → 주황(P2) → 진홍(P3)
+            float ratio = (s.info.max_hp > 0)
+                        ? std::max(0.f, (float)s.info.hp / s.info.max_hp) : 0.f;
+            sf::Color bc = (ratio > 0.66f) ? sf::Color(210, 160, 0)
+                         : (ratio > 0.33f) ? sf::Color(200, 80,  0)
+                                           : sf::Color(180, 0,   0);
+            boss_circle.setFillColor(bc);
+            boss_circle.setPosition(s.info.x + 0.08f, s.info.y + 0.08f);
+            win.draw(boss_circle);
+            draw_hp_bar(win, (float)s.info.x, (float)s.info.y, s.info.hp, s.info.max_hp);
+            continue;
+        }
+
         sf::Color c;
         if (s.info.npc_type == NPC_PC) {
             c = sf::Color(55, 185, 80);
         } else if (s.info.npc_state == NPC_STATE_CHASE) {
-            c = sf::Color(255, 40, 40);   // 추격 중 — 밝은 빨강 (타입 무관)
+            c = sf::Color(255, 40, 40);   // 추격 중 — 밝은 빨강
         } else if (s.info.npc_type == NPC_AGRO) {
             c = sf::Color(200, 100, 30);  // Agro 로밍 — 주황
         } else {
@@ -503,6 +542,41 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
     win.draw(obj_rect);
     draw_hp_bar(win, (float)g_my_x, (float)g_my_y, g_my_hp, g_my_max_hp);
 
+    // ── 공격/스킬 이펙트 (게임 뷰, 오브젝트 위에 오버레이) ──────
+    if (g_effect.type != EffectType::NONE) {
+        auto now_ef = std::chrono::steady_clock::now();
+        int eff_ms  = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+            now_ef - g_effect.start).count();
+        int duration = (g_effect.type == EffectType::SKILL) ? 200 : 150;
+
+        if (eff_ms < duration) {
+            float t     = 1.f - (float)eff_ms / duration;  // 1→0 페이드
+            auto alpha  = (sf::Uint8)(220 * t);
+
+            sf::RectangleShape eff_tile(sf::Vector2f(0.92f, 0.92f));
+
+            if (g_effect.type == EffectType::ATTACK) {
+                // 상하좌우 4칸 — 주황
+                eff_tile.setFillColor(sf::Color(255, 140, 0, alpha));
+                const int dirs[4][2] = {{0,-1},{0,1},{-1,0},{1,0}};
+                for (auto& d : dirs) {
+                    eff_tile.setPosition(g_my_x + d[0] + 0.04f, g_my_y + d[1] + 0.04f);
+                    win.draw(eff_tile);
+                }
+            } else {
+                // 3x3 전체 (자기 포함) — 보라
+                eff_tile.setFillColor(sf::Color(160, 60, 255, alpha));
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        eff_tile.setPosition(g_my_x + dx + 0.04f, g_my_y + dy + 0.04f);
+                        win.draw(eff_tile);
+                    }
+            }
+        } else {
+            g_effect.type = EffectType::NONE;
+        }
+    }
+
     // 픽셀 뷰로 전환해서 이름 레이블 출력
     win.setView(win.getDefaultView());
 
@@ -513,7 +587,9 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         if (sp.x < 0 || sp.x > WIN_W || sp.y < 0 || sp.y > WIN_H - UI_H) continue;
 
         sf::Color tc;
-        if (s.info.npc_type == NPC_PC) {
+        if (s.info.npc_type == NPC_BOSS) {
+            tc = sf::Color(255, 215, 0);    // 보스 — 금색
+        } else if (s.info.npc_type == NPC_PC) {
             tc = sf::Color(140, 230, 140);
         } else if (s.info.npc_state == NPC_STATE_CHASE) {
             tc = sf::Color(255, 80, 80);
@@ -609,12 +685,43 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
 
     // 조작 힌트
     char hint_buf[128];
-    sprintf_s(hint_buf, "ID:%-5d  X:%-4d Y:%-4d    [Arrow]Move  [A]Attack  [T]Chat",
+    sprintf_s(hint_buf, "ID:%-5d  X:%-4d Y:%-4d    [Arrow]Move  [A]Attack  [S]Skill  [T]Chat",
               g_my_id, g_my_x, g_my_y);
     sf::Text hint_text(hint_buf, font, 11);
     hint_text.setFillColor(sf::Color(100, 105, 130));
     hint_text.setPosition(10.f, ui_top + 19.f);
     win.draw(hint_text);
+
+    // 스킬 쿨타임 바
+    {
+        auto now_sk = std::chrono::steady_clock::now();
+        int elapsed_sk = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+            now_sk - g_last_skill_time).count();
+        float sk_ratio = std::min(1.f, (float)elapsed_sk / SKILL_CD_MS);
+
+        constexpr float SK_X = 350.f, SK_W = 100.f;
+        sf::RectangleShape skBg({ SK_W, 11.f });
+        skBg.setFillColor(sf::Color(30, 20, 50));
+        skBg.setPosition(SK_X, ui_top + 5.f);
+        win.draw(skBg);
+
+        if (sk_ratio > 0.f) {
+            sf::RectangleShape skBar({ SK_W * sk_ratio, 11.f });
+            skBar.setFillColor(sk_ratio >= 1.f ? sf::Color(120, 60, 220) : sf::Color(70, 40, 130));
+            skBar.setPosition(SK_X, ui_top + 5.f);
+            win.draw(skBar);
+        }
+
+        char sk_buf[32];
+        if (sk_ratio >= 1.f)
+            sprintf_s(sk_buf, "Skill READY");
+        else
+            sprintf_s(sk_buf, "Skill %.1fs", (SKILL_CD_MS - elapsed_sk) / 1000.f);
+        sf::Text sk_text(sk_buf, font, 11);
+        sk_text.setFillColor(sk_ratio >= 1.f ? sf::Color(200, 160, 255) : sf::Color(120, 100, 160));
+        sk_text.setPosition(SK_X + 2.f, ui_top + 4.f);
+        win.draw(sk_text);
+    }
 
     // 메시지 로그 (msg_start 부터 아래로, msg_end 넘으면 클리핑)
     {
@@ -728,7 +835,22 @@ int main()
                         case sf::Keyboard::Down:  send_move(DOWN);  g_move_time += 500; break;
                         case sf::Keyboard::Left:  send_move(LEFT);  g_move_time += 500; break;
                         case sf::Keyboard::Right: send_move(RIGHT); g_move_time += 500; break;
-                        case sf::Keyboard::A:     send_attack(); break;
+                        case sf::Keyboard::A:
+                            send_attack();
+                            g_effect = { EffectType::ATTACK, std::chrono::steady_clock::now() };
+                            break;
+                        case sf::Keyboard::S:
+                        {
+                            auto now = std::chrono::steady_clock::now();
+                            int elapsed = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                                now - g_last_skill_time).count();
+                            if (elapsed >= SKILL_CD_MS) {
+                                send_skill();
+                                g_last_skill_time = now;
+                                g_effect = { EffectType::SKILL, now };
+                            }
+                            break;
+                        }
                         case sf::Keyboard::T:
                             g_chat_mode = true;
                             g_chat_input.clear();

@@ -1,7 +1,7 @@
 #pragma once
 #include "Object.h"
 
-enum NPC_TYPE { NPC_PEACE_TYPE = 1, NPC_AGRO_TYPE = 2 };
+enum NPC_TYPE { NPC_PEACE_TYPE = 1, NPC_AGRO_TYPE = 2, NPC_BOSS_TYPE = 3 };
 // NPC_STATE는 protocol_2026.h에서 공유 (NPC_STATE_IDLE/ROAMING/CHASE)
 
 class CNPC : public CObject {
@@ -22,6 +22,12 @@ public:
     {
         m_state = CS_PLAYING;
         m_last_npc_move_time = system_clock::now();
+    }
+
+    int get_boss_phase() const {
+        if (m_max_hp <= 0) return 1;
+        int pct = (m_hp * 100) / m_max_hp;
+        return (pct > 66) ? 1 : (pct > 33) ? 2 : 3;
     }
 
     void do_roaming_move();
