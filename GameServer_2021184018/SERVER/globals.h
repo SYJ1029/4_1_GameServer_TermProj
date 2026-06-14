@@ -67,6 +67,13 @@ constexpr short NPC_ATTACK_DMG    = 8;
 constexpr short HP_POTION_RESTORE = 30;   // 포션 HP 회복량
 constexpr int   ITEM_DROP_CHANCE  = 30;   // NPC 처치 시 포션 드롭 확률 (%)
 
+// 퀘스트 수치 (DB 연동 시 quest_definitions 테이블로 분리 예정)
+// QUEST_COUNT / QUEST_ID_* 는 protocol_2026.h 에 정의
+constexpr int QUEST_AGRO_TARGET       = 10;
+constexpr int QUEST_BOSS_TARGET       = 3;
+constexpr int QUEST_AGRO_REWARD_XP    = 500;
+constexpr int QUEST_BOSS_REWARD_XP    = 3000;
+
 constexpr int SECTOR_SIZE = VIEW_RANGE * 2 + 1;
 constexpr int MAX_SECTORS_X = (WORLD_WIDTH + SECTOR_SIZE - 1) / SECTOR_SIZE;
 constexpr int MAX_SECTORS_Y = (WORLD_HEIGHT + SECTOR_SIZE - 1) / SECTOR_SIZE;

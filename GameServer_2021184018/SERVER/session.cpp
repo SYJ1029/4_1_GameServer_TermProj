@@ -168,6 +168,26 @@ void SESSION::send_all_world_items()
     }
 }
 
+void SESSION::send_quest_update(int quest_id)
+{
+    if (!can_send() || quest_id < 0 || quest_id >= QUEST_COUNT) return;
+    static const int targets[QUEST_COUNT] = { QUEST_AGRO_TARGET, QUEST_BOSS_TARGET };
+    auto& q = m_quests[quest_id];
+    S2C_QuestUpdate pkt;
+    pkt.size     = sizeof(pkt);
+    pkt.type     = S2C_QUEST_UPDATE;
+    pkt.quest_id = (unsigned char)quest_id;
+    pkt.state    = q.state;
+    pkt.current  = q.kill_count;
+    pkt.target   = targets[quest_id];
+    do_send(pkt.size, reinterpret_cast<char*>(&pkt));
+}
+
+void SESSION::send_all_quest_states()
+{
+    for (int i = 0; i < QUEST_COUNT; ++i) send_quest_update(i);
+}
+
 static void broadcast_damage(short ax, short ay, int attacker_id, int target_id,
                               short dmg, short target_hp)
 {
@@ -192,6 +212,39 @@ static void spawn_item(short x, short y, ITEM_TYPE type)
         auto obj = get_object(id);
         if (obj) to_player(obj)->send_item_appear(item->id, x, y, type);
     }
+}
+
+// 퀘스트 킬 카운트 증가 + 완료 처리 (C2S_ATTACK/C2S_SKILL 공용)
+static void process_quest_kill(SESSION* player, int npc_type_int)
+{
+    static const int targets[QUEST_COUNT] = { QUEST_AGRO_TARGET, QUEST_BOSS_TARGET };
+    static const int rewards[QUEST_COUNT] = { QUEST_AGRO_REWARD_XP, QUEST_BOSS_REWARD_XP };
+    static const char* names[QUEST_COUNT] = { "Agro Slayer", "Boss Hunter" };
+
+    int qid = -1;
+    if      (npc_type_int == NPC_AGRO_TYPE) qid = QUEST_ID_AGRO;
+    else if (npc_type_int == NPC_BOSS_TYPE) qid = QUEST_ID_BOSS;
+    if (qid < 0) return;
+
+    auto& q = player->m_quests[qid];
+    if (q.state != Q_ACTIVE) return;
+
+    q.kill_count++;
+    if (q.kill_count >= targets[qid]) {
+        // 완료 처리
+        q.kill_count = 0;          // 반복 가능 — 나중에 DB에선 state=Q_COMPLETED 후 수령
+        int xp = rewards[qid];
+        player->m_xp += xp;
+        while (player->m_xp >= player->exp_for_next_level())
+            player->m_xp -= player->exp_for_next_level(), ++player->m_level;
+
+        char sys[MAX_CHAT_LEN];
+        sprintf_s(sys, "[Quest] %s 완료! +%d XP (Lv.%d)", names[qid], xp, player->m_level);
+        player->send_chat(-1, "System", sys);
+        player->send_stat_info(player->m_id, player->m_hp, player->m_max_hp,
+                               player->m_level, player->m_xp, player->exp_for_next_level());
+    }
+    player->send_quest_update(qid);
 }
 
 static void broadcast_item_remove(int item_id, short x, short y)
@@ -262,6 +315,7 @@ bool SESSION::process_packet(unsigned char* p)
             send_login_success();
             send_avatar_info();
             send_all_world_items();
+            send_all_quest_states();
             update_player_view(m_id);
             event_type regen_ev;
             regen_ev.obj_id      = m_id;
@@ -335,12 +389,16 @@ bool SESSION::process_packet(unsigned char* p)
                 if      (npc->m_npc_type == NPC_BOSS_TYPE) xp_gain *= 10; // 보스 = 10배
                 else if (npc->m_npc_type == NPC_AGRO_TYPE) xp_gain *= 2;  // Agro = 2배
 
+                int npc_type_snapshot = npc->m_npc_type;
                 npc_die(obj_id, npc);
 
                 // EXP 지급 + 레벨업
                 m_xp += xp_gain;
                 while (m_xp >= exp_for_next_level())
                     m_xp -= exp_for_next_level(), ++m_level;
+
+                // 퀘스트 진행
+                process_quest_kill(this, npc_type_snapshot);
 
                 // 전투 로그 메시지
                 char sys_msg[MAX_CHAT_LEN];
@@ -397,11 +455,14 @@ bool SESSION::process_packet(unsigned char* p)
                 if      (npc->m_npc_type == NPC_BOSS_TYPE) xp_gain *= 10;
                 else if (npc->m_npc_type == NPC_AGRO_TYPE) xp_gain *= 2;
 
+                int npc_type_snapshot = npc->m_npc_type;
                 npc_die(obj_id, npc);
 
                 m_xp += xp_gain;
                 while (m_xp >= exp_for_next_level())
                     m_xp -= exp_for_next_level(), ++m_level;
+
+                process_quest_kill(this, npc_type_snapshot);
 
                 char sys_msg[MAX_CHAT_LEN];
                 sprintf_s(sys_msg, "[Skill] %s 처치! +%d XP (Lv.%d, XP:%d/%d)",

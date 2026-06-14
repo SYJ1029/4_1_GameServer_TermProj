@@ -14,8 +14,20 @@ enum PACKET_TYPE {
     S2C_LOGIN_RESULT, S2C_AVATAR_INFO,
     S2C_ADD_PLAYER, S2C_REMOVE_PLAYER, S2C_MOVE_PLAYER,
     S2C_CHAT, S2C_STAT_INFO, S2C_DAMAGE_INFO,
-    S2C_ITEM_APPEAR, S2C_ITEM_REMOVE, S2C_ITEM_ADD
+    S2C_ITEM_APPEAR, S2C_ITEM_REMOVE, S2C_ITEM_ADD,
+    S2C_QUEST_UPDATE
 };
+
+// 퀘스트 상태 (DB 연동 시 그대로 컬럼으로 사용)
+enum QUEST_STATE : unsigned char {
+    Q_NONE      = 0,  // 미수락
+    Q_ACTIVE    = 1,  // 진행 중
+    Q_COMPLETED = 2   // 완료 (보상 수령 전)
+};
+
+constexpr int QUEST_COUNT   = 2;
+constexpr int QUEST_ID_AGRO = 0;
+constexpr int QUEST_ID_BOSS = 1;
 
 enum ITEM_TYPE : unsigned char { ITEM_HP_POTION = 1 };
 
@@ -162,6 +174,15 @@ struct S2C_ItemAdd {
     PACKET_TYPE   type;
     ITEM_TYPE     item_type;
     int           count;   // 현재 보유량
+};
+
+struct S2C_QuestUpdate {
+    unsigned char size;
+    PACKET_TYPE   type;
+    unsigned char quest_id;   // 0=Agro Slayer, 1=Boss Hunter
+    QUEST_STATE   state;
+    int           current;    // 현재 킬 수
+    int           target;     // 목표 킬 수
 };
 
 #pragma pack(pop)

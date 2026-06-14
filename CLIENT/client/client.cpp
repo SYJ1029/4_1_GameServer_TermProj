@@ -64,6 +64,21 @@ constexpr int SKILL_CD_MS = 3000;
 static std::chrono::steady_clock::time_point g_last_skill_time =
     std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
+// ── 퀘스트 ────────────────────────────────────────────────────────
+struct QuestClient {
+    const char* name;
+    const char* desc;
+    const char* reward_str;
+    int         current;
+    int         target;
+    QUEST_STATE state;
+};
+static QuestClient g_quests[2] = {
+    { "Agro Slayer",  "Agro NPC를 처치하라",  "보상: 500 XP",  0, 10, Q_ACTIVE },
+    { "Boss Hunter",  "보스 몬스터를 처치하라", "보상: 3000 XP", 0,  3, Q_ACTIVE }
+};
+static bool g_quest_panel_open = false;
+
 // ── 공격 이펙트 ───────────────────────────────────────────────────
 enum class EffectType { NONE, ATTACK, SKILL };
 struct VisualEffect {
@@ -306,6 +321,16 @@ static void handle_packet(unsigned char* p)
         auto* pkt = reinterpret_cast<S2C_ItemAdd*>(p);
         if (pkt->item_type == ITEM_HP_POTION)
             g_potion_count = pkt->count;
+        break;
+    }
+    case S2C_QUEST_UPDATE:
+    {
+        auto* pkt = reinterpret_cast<S2C_QuestUpdate*>(p);
+        if (pkt->quest_id < 2) {
+            g_quests[pkt->quest_id].current = pkt->current;
+            g_quests[pkt->quest_id].target  = pkt->target;
+            g_quests[pkt->quest_id].state   = pkt->state;
+        }
         break;
     }
     case S2C_DAMAGE_INFO:
@@ -660,6 +685,141 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
             sf::Vector2f(sp.x - lbl.getLocalBounds().width / 2.f, (float)sp.y - 14.f), tc);
     }
 
+    // ── 퀘스트 트래커 (우상단 항상 표시) ────────────────────────────
+    {
+        constexpr float QW = 152.f;
+        constexpr float QX = WIN_W - QW - 6.f;
+        constexpr float QY = 6.f;
+        constexpr float ROW_H = 40.f;
+        float qh = 18.f + QUEST_COUNT * ROW_H;
+
+        sf::RectangleShape qbg({ QW, qh });
+        qbg.setFillColor(sf::Color(8, 8, 20, 210));
+        qbg.setOutlineColor(sf::Color(70, 70, 110));
+        qbg.setOutlineThickness(1.f);
+        qbg.setPosition(QX, QY);
+        win.draw(qbg);
+
+        sf::Text qhdr("[Q] Quest Tracker", font, 10);
+        qhdr.setFillColor(sf::Color(160, 160, 210));
+        qhdr.setStyle(sf::Text::Bold);
+        qhdr.setPosition(QX + 5.f, QY + 3.f);
+        win.draw(qhdr);
+
+        const sf::Color q_colors[2] = { sf::Color(240, 170, 60), sf::Color(255, 215, 0) };
+        float row_y = QY + 18.f;
+        for (int qi = 0; qi < 2; ++qi) {
+            auto& q = g_quests[qi];
+            float ratio = (q.target > 0) ? std::min(1.f, (float)q.current / q.target) : 0.f;
+
+            sf::Text qname(q.name, font, 10);
+            qname.setFillColor(q_colors[qi]);
+            qname.setPosition(QX + 5.f, row_y);
+            win.draw(qname);
+
+            // 진행 바 배경
+            constexpr float BW = QW - 10.f;
+            sf::RectangleShape bar_bg({ BW, 9.f });
+            bar_bg.setFillColor(sf::Color(25, 25, 45));
+            bar_bg.setPosition(QX + 5.f, row_y + 13.f);
+            win.draw(bar_bg);
+
+            if (ratio > 0.f) {
+                sf::RectangleShape bar({ BW * ratio, 9.f });
+                bar.setFillColor(ratio >= 1.f ? sf::Color(60, 220, 60) : q_colors[qi]);
+                bar.setPosition(QX + 5.f, row_y + 13.f);
+                win.draw(bar);
+            }
+
+            char cnt[16];
+            sprintf_s(cnt, "%d/%d", q.current, q.target);
+            sf::Text qcnt(cnt, font, 9);
+            qcnt.setFillColor(sf::Color(190, 190, 190));
+            qcnt.setPosition(QX + QW - 5.f - qcnt.getLocalBounds().width, row_y + 13.f);
+            win.draw(qcnt);
+
+            row_y += ROW_H;
+        }
+    }
+
+    // ── 퀘스트 패널 (Q 토글) ─────────────────────────────────────
+    if (g_quest_panel_open) {
+        constexpr float PW = 240.f, PX = (WIN_W - PW) / 2.f, PY = 30.f;
+        constexpr float PROW_H = 62.f;
+        float ph = 28.f + QUEST_COUNT * PROW_H + 10.f;
+
+        // 반투명 배경
+        sf::RectangleShape pbg({ PW, ph });
+        pbg.setFillColor(sf::Color(8, 8, 22, 230));
+        pbg.setOutlineColor(sf::Color(100, 100, 160));
+        pbg.setOutlineThickness(1.5f);
+        pbg.setPosition(PX, PY);
+        win.draw(pbg);
+
+        sf::Text phdr("  Quest Log", font, 13);
+        phdr.setFillColor(sf::Color(200, 210, 255));
+        phdr.setStyle(sf::Text::Bold);
+        phdr.setPosition(PX + 8.f, PY + 6.f);
+        win.draw(phdr);
+
+        // 구분선
+        sf::RectangleShape sep({ PW - 16.f, 1.f });
+        sep.setFillColor(sf::Color(70, 70, 110));
+        sep.setPosition(PX + 8.f, PY + 24.f);
+        win.draw(sep);
+
+        const sf::Color p_colors[2] = { sf::Color(240, 170, 60), sf::Color(255, 215, 0) };
+        float py = PY + 30.f;
+        for (int qi = 0; qi < 2; ++qi) {
+            auto& q = g_quests[qi];
+            float ratio = (q.target > 0) ? std::min(1.f, (float)q.current / q.target) : 0.f;
+
+            // 이름
+            sf::Text pname(q.name, font, 12);
+            pname.setFillColor(p_colors[qi]);
+            pname.setStyle(sf::Text::Bold);
+            pname.setPosition(PX + 10.f, py);
+            win.draw(pname);
+
+            // 설명
+            sf::Text pdesc(q.desc, font, 10);
+            pdesc.setFillColor(sf::Color(160, 165, 180));
+            pdesc.setPosition(PX + 10.f, py + 14.f);
+            win.draw(pdesc);
+
+            // 진행 바
+            constexpr float PBW = PW - 20.f;
+            sf::RectangleShape pbar_bg({ PBW, 10.f });
+            pbar_bg.setFillColor(sf::Color(25, 25, 45));
+            pbar_bg.setPosition(PX + 10.f, py + 28.f);
+            win.draw(pbar_bg);
+
+            if (ratio > 0.f) {
+                sf::RectangleShape pbar({ PBW * ratio, 10.f });
+                pbar.setFillColor(ratio >= 1.f ? sf::Color(60, 220, 60) : p_colors[qi]);
+                pbar.setPosition(PX + 10.f, py + 28.f);
+                win.draw(pbar);
+            }
+
+            // 카운트 + 보상
+            char pcnt[32];
+            sprintf_s(pcnt, "%d / %d     %s", q.current, q.target, q.reward_str);
+            sf::Text pcnt_txt(pcnt, font, 10);
+            pcnt_txt.setFillColor(sf::Color(180, 185, 200));
+            pcnt_txt.setPosition(PX + 10.f, py + 41.f);
+            win.draw(pcnt_txt);
+
+            // 퀘스트 간 구분선
+            if (qi < QUEST_COUNT - 1) {
+                sf::RectangleShape qsep({ PW - 16.f, 1.f });
+                qsep.setFillColor(sf::Color(50, 50, 80));
+                qsep.setPosition(PX + 8.f, py + PROW_H - 2.f);
+                win.draw(qsep);
+            }
+            py += PROW_H;
+        }
+    }
+
     // 내 이름
     lbl.setString(s_login_name);
     sf::Vector2i my_sp = win.mapCoordsToPixel(
@@ -752,7 +912,7 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
 
     // 조작 힌트
     char hint_buf[128];
-    sprintf_s(hint_buf, "ID:%-5d  X:%-4d Y:%-4d   [Arrow]Move [A]Atk [S]Skill [F]Potion [T]Chat",
+    sprintf_s(hint_buf, "ID:%-4d X:%-4d Y:%-4d  [Arrow]Move [A]Atk [S]Skill [F]Pot [Q]Quest [T]Chat",
               g_my_id, g_my_x, g_my_y);
     sf::Text hint_text(hint_buf, font, 11);
     hint_text.setFillColor(sf::Color(100, 105, 130));
@@ -920,6 +1080,9 @@ int main()
                         }
                         case sf::Keyboard::F:
                             if (g_potion_count > 0) send_use_item();
+                            break;
+                        case sf::Keyboard::Q:
+                            g_quest_panel_open = !g_quest_panel_open;
                             break;
                         case sf::Keyboard::T:
                             g_chat_mode = true;

@@ -248,6 +248,7 @@ void worker_thread()
 			cl->send_login_success();
 			cl->send_avatar_info();
 			cl->send_all_world_items();
+			cl->send_all_quest_states();
 			update_player_view(key);
 			event_type ev;
 			ev.obj_id      = key;

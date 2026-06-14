@@ -1,13 +1,20 @@
 #pragma once
 #include "Object.h"
 
+// DB 연동 시 player_quests 테이블 행 하나와 1:1 대응
+struct QuestProgress {
+    QUEST_STATE state      = Q_ACTIVE;  // 현재 auto-accept; 나중에 Q_NONE으로 변경
+    int         kill_count = 0;
+};
+
 class SESSION : public CObject {
 public:
     SOCKET    m_client;
     EXP_OVER  m_recv_over;
     int       m_prev_recv;
     int       m_xp;
-    int       m_potion_count;
+    int           m_potion_count;
+    QuestProgress m_quests[QUEST_COUNT];   // [QUEST_ID_AGRO], [QUEST_ID_BOSS]
     system_clock::time_point m_last_skill_time;
     std::unordered_set<int> m_visible_objects;
     std::mutex              m_visible_mutex;
@@ -101,6 +108,8 @@ public:
     void send_item_remove(int item_id);
     void send_item_add(ITEM_TYPE item_type, int count);
     void send_all_world_items();
+    void send_quest_update(int quest_id);
+    void send_all_quest_states();
 
     bool process_packet(unsigned char* p);
     void do_move(DIRECTION dir);
