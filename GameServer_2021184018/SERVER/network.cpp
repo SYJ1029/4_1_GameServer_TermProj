@@ -256,6 +256,7 @@ void worker_thread()
 			sector_manager.add_object_to_sector(key, cl->m_x, cl->m_y);
 			cl->send_login_success();
 			cl->send_avatar_info();
+			cl->send_all_inventory_items();
 			cl->send_all_world_items();
 			cl->send_all_quest_states();
 			update_player_view(key);

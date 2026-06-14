@@ -47,14 +47,14 @@ static bool connect_db(SQLHENV& henv, SQLHDBC& hdbc)
     return true;
 }
 
-// ── 기본 플레이어 로그인 ─────────────────────────────────────────────
+// ── 로그인: x/y/hp/level/exp/inv1~6 로드 ────────────────────────────
 static bool db_login_or_create(SQLHDBC hdbc, const char* login_id, DB_RESULT& out)
 {
     SQLHSTMT hstmt;
     if (!sql_ok(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return false;
 
     SQLWCHAR query[128];
-    swprintf_s(query, L"EXEC dbo.sp_LoginOrCreate @login_id = N'%S'", login_id);
+    swprintf_s(query, L"EXEC dbo.sp_LoginOrCreate @login_id=N'%S'", login_id);
     if (!sql_ok(SQLExecDirectW(hstmt, query, SQL_NTS))) {
         db_error(SQL_HANDLE_STMT, hstmt);
         SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
@@ -63,25 +63,31 @@ static bool db_login_or_create(SQLHDBC hdbc, const char* login_id, DB_RESULT& ou
 
     SQLSMALLINT x, y, hp;
     SQLINTEGER  level, exp;
-    SQLLEN cbx, cby, cbhp, cblevel, cbexp;
-    SQLBindCol(hstmt, 1, SQL_C_SSHORT, &x,     0, &cbx);
-    SQLBindCol(hstmt, 2, SQL_C_SSHORT, &y,     0, &cby);
-    SQLBindCol(hstmt, 3, SQL_C_SSHORT, &hp,    0, &cbhp);
-    SQLBindCol(hstmt, 4, SQL_C_LONG,   &level, 0, &cblevel);
-    SQLBindCol(hstmt, 5, SQL_C_LONG,   &exp,   0, &cbexp);
+    SQLINTEGER  inv[ITEM_SLOT_COUNT] = {};
+    SQLLEN cb[11] = {};
+
+    SQLBindCol(hstmt, 1,  SQL_C_SSHORT, &x,     0, &cb[0]);
+    SQLBindCol(hstmt, 2,  SQL_C_SSHORT, &y,     0, &cb[1]);
+    SQLBindCol(hstmt, 3,  SQL_C_SSHORT, &hp,    0, &cb[2]);
+    SQLBindCol(hstmt, 4,  SQL_C_LONG,   &level, 0, &cb[3]);
+    SQLBindCol(hstmt, 5,  SQL_C_LONG,   &exp,   0, &cb[4]);
+    for (int i = 0; i < ITEM_SLOT_COUNT; ++i)
+        SQLBindCol(hstmt, (SQLUSMALLINT)(6 + i), SQL_C_LONG, &inv[i], 0, &cb[5 + i]);
 
     if (sql_ok(SQLFetch(hstmt))) {
         out.success = true;
         out.x = x; out.y = y; out.hp = hp;
         out.level = level; out.exp = exp;
+        for (int i = 0; i < ITEM_SLOT_COUNT; ++i)
+            out.inventory[i] = (int)inv[i];
     }
 
     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
     return out.success;
 }
 
-// ── 인벤토리 + 퀘스트 로드 (sp_LoadPlayerExtra) ─────────────────────
-static void db_load_player_extra(SQLHDBC hdbc, const char* login_id, DB_RESULT& out)
+// ── 퀘스트 로드 (sp_LoadPlayerExtra) ────────────────────────────────
+static void db_load_quests(SQLHDBC hdbc, const char* login_id, DB_RESULT& out)
 {
     SQLHSTMT hstmt;
     if (!sql_ok(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return;
@@ -94,41 +100,34 @@ static void db_load_player_extra(SQLHDBC hdbc, const char* login_id, DB_RESULT& 
         return;
     }
 
-    // Result set 1: 인벤토리 (slot, item_count)
-    SQLINTEGER slot = 0, item_count = 0;
-    SQLLEN cb1 = 0, cb2 = 0;
-    SQLBindCol(hstmt, 1, SQL_C_LONG, &slot,       0, &cb1);
-    SQLBindCol(hstmt, 2, SQL_C_LONG, &item_count, 0, &cb2);
-    while (sql_ok(SQLFetch(hstmt))) {
-        int idx = slot - 1;
-        if (idx >= 0 && idx < ITEM_SLOT_COUNT)
-            out.inventory[idx] = item_count;
-    }
-
-    // Result set 2: 퀘스트 (quest_id, kill_count)
-    SQLMoreResults(hstmt);
     SQLINTEGER quest_id = 0, kill_count = 0;
+    SQLLEN cb1 = 0, cb2 = 0;
     SQLBindCol(hstmt, 1, SQL_C_LONG, &quest_id,   0, &cb1);
     SQLBindCol(hstmt, 2, SQL_C_LONG, &kill_count, 0, &cb2);
     while (sql_ok(SQLFetch(hstmt))) {
         if (quest_id >= 0 && quest_id < QUEST_COUNT)
-            out.quest_kill[quest_id] = kill_count;
+            out.quest_kill[quest_id] = (int)kill_count;
     }
 
     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
 }
 
-// ── 기본 플레이어 저장 ───────────────────────────────────────────────
+// ── 기본 플레이어 저장 (x/y/hp/level/exp/inv1~6) ────────────────────
 static void db_save_player(SQLHDBC hdbc, const char* login_id,
-                            short x, short y, short hp, int level, int exp)
+                            short x, short y, short hp, int level, int exp,
+                            const int inventory[ITEM_SLOT_COUNT])
 {
     SQLHSTMT hstmt;
     if (!sql_ok(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return;
 
-    SQLWCHAR query[200];
+    SQLWCHAR query[300];
     swprintf_s(query,
-        L"EXEC dbo.sp_SavePlayer @login_id=N'%S',@x=%d,@y=%d,@hp=%d,@level=%d,@exp=%d",
-        login_id, x, y, hp, level, exp);
+        L"EXEC dbo.sp_SavePlayer @login_id=N'%S',"
+        L"@x=%d,@y=%d,@hp=%d,@level=%d,@exp=%d,"
+        L"@inv1=%d,@inv2=%d,@inv3=%d,@inv4=%d,@inv5=%d,@inv6=%d",
+        login_id, x, y, hp, level, exp,
+        inventory[0], inventory[1], inventory[2],
+        inventory[3], inventory[4], inventory[5]);
 
     if (!sql_ok(SQLExecDirectW(hstmt, query, SQL_NTS)))
         db_error(SQL_HANDLE_STMT, hstmt);
@@ -136,23 +135,17 @@ static void db_save_player(SQLHDBC hdbc, const char* login_id,
     SQLFreeHandle(SQL_HANDLE_STMT, hstmt);
 }
 
-// ── 인벤토리 + 퀘스트 저장 (sp_SavePlayerExtra) ─────────────────────
-static void db_save_player_extra(SQLHDBC hdbc, const char* login_id,
-                                  const int inventory[ITEM_SLOT_COUNT],
-                                  const int quest_kill[QUEST_COUNT])
+// ── 퀘스트 저장 (sp_SavePlayerExtra) ────────────────────────────────
+static void db_save_quests(SQLHDBC hdbc, const char* login_id,
+                            const int quest_kill[QUEST_COUNT])
 {
     SQLHSTMT hstmt;
     if (!sql_ok(SQLAllocHandle(SQL_HANDLE_STMT, hdbc, &hstmt))) return;
 
-    SQLWCHAR query[300];
+    SQLWCHAR query[150];
     swprintf_s(query,
-        L"EXEC dbo.sp_SavePlayerExtra @login_id=N'%S',"
-        L"@inv1=%d,@inv2=%d,@inv3=%d,@inv4=%d,@inv5=%d,@inv6=%d,"
-        L"@q0_kill=%d,@q1_kill=%d",
-        login_id,
-        inventory[0], inventory[1], inventory[2],
-        inventory[3], inventory[4], inventory[5],
-        quest_kill[0], quest_kill[1]);
+        L"EXEC dbo.sp_SavePlayerExtra @login_id=N'%S',@q0_kill=%d,@q1_kill=%d",
+        login_id, quest_kill[0], quest_kill[1]);
 
     if (!sql_ok(SQLExecDirectW(hstmt, query, SQL_NTS)))
         db_error(SQL_HANDLE_STMT, hstmt);
@@ -195,14 +188,15 @@ void db_thread()
             if (connected) {
                 db_login_or_create(hdbc, ev.login_id, db_over->m_db_result);
                 if (db_over->m_db_result.success)
-                    db_load_player_extra(hdbc, ev.login_id, db_over->m_db_result);
+                    db_load_quests(hdbc, ev.login_id, db_over->m_db_result);
             }
             PostQueuedCompletionStatus(g_iocp, 1,
                                        (ULONG_PTR)ev.session_id, &db_over->m_over);
         }
         else if (ev.type == DB_SAVE && connected) {
-            db_save_player(hdbc, ev.login_id, ev.x, ev.y, ev.hp, ev.level, ev.exp);
-            db_save_player_extra(hdbc, ev.login_id, ev.inventory, ev.quest_kill);
+            db_save_player(hdbc, ev.login_id, ev.x, ev.y, ev.hp, ev.level, ev.exp,
+                           ev.inventory);
+            db_save_quests(hdbc, ev.login_id, ev.quest_kill);
         }
     }
 }

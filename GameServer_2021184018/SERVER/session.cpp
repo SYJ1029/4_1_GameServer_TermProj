@@ -168,6 +168,14 @@ void SESSION::send_all_world_items()
     }
 }
 
+void SESSION::send_all_inventory_items()
+{
+    for (int i = 0; i < ITEM_SLOT_COUNT; ++i) {
+        if (m_inventory[i] > 0)
+            send_item_add((ITEM_TYPE)(i + 1), m_inventory[i]);
+    }
+}
+
 void SESSION::send_quest_update(int quest_id)
 {
     if (!can_send() || quest_id < 0 || quest_id >= QUEST_COUNT) return;

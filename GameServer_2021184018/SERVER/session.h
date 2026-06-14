@@ -111,6 +111,7 @@ public:
     void send_item_remove(int item_id);
     void send_item_add(ITEM_TYPE item_type, int count);
     void send_all_world_items();
+    void send_all_inventory_items();
     void send_quest_update(int quest_id);
     void send_all_quest_states();
 
