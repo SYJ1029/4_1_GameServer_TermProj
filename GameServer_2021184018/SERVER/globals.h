@@ -92,6 +92,8 @@ struct DB_RESULT {
     short hp      = PC_MAX_HP;
     int   level   = 1;
     int   exp     = 0;
+    int   inventory[ITEM_SLOT_COUNT] = {};
+    int   quest_kill[QUEST_COUNT]    = {};
 };
 
 struct event_type {

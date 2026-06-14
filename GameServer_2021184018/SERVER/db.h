@@ -4,16 +4,7 @@
 
 enum DB_TYPE { DB_LOGIN, DB_SAVE };
 
-struct DB_RESULT {
-    bool  success = false;
-    short x       = PC_SPAWN_X;
-    short y       = PC_SPAWN_Y;
-    short hp      = PC_MAX_HP;
-    int   level   = 1;
-    int   exp     = 0;
-    int   inventory[ITEM_SLOT_COUNT] = {};   // 슬롯 1-6 → 인덱스 0-5
-    int   quest_kill[QUEST_COUNT]    = {};   // 퀘스트별 킬카운트
-};
+// DB_RESULT는 globals.h 에 정의 (EXP_OVER가 멤버로 사용)
 
 struct DB_EVENT {
     DB_TYPE type;
