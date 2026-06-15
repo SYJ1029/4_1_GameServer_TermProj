@@ -42,7 +42,7 @@ constexpr int NPC_PEACE_LEVEL = 1;
 constexpr int NPC_AGRO_LEVEL  = 2;
 
 // 보스 수치
-constexpr int   BOSS_COUNT          = 10;
+constexpr int   BOSS_COUNT          = 15;
 constexpr int   BOSS_LEVEL          = 20;
 constexpr short BOSS_MAX_HP         = 500;
 constexpr short BOSS_ATTACK_DMG_P1  = 20;   // Phase 1 (HP > 66%)

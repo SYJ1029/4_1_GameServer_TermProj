@@ -415,11 +415,20 @@ void InitializeNPC()
     int npc_id = NPC_ID_START;
     int total   = 0;
 
-    // 보스 NPC 배치 (맵 전역에 격자 형태로 고정 스폰)
-    static const short BOSS_SPAWN_X[BOSS_COUNT] = { 200, 600, 1000, 1400, 1800,
-                                                     200, 600, 1000, 1400, 1800 };
-    static const short BOSS_SPAWN_Y[BOSS_COUNT] = { 300, 300,  300,  300,  300,
-                                                    1700,1700, 1700, 1700, 1700 };
+    // 보스 NPC 배치 — 각 성채(Zone) 중심에 1마리씩 고정 스폰
+    // 순서: Center, OrcNW, OrcNE, GoblinSW, GoblinSE,
+    //       OgreW, OgreE, KnightNW, KnightNE, KnightSW, KnightSE,
+    //       DragonNW, DragonNE, DragonSW, DragonSE
+    static const short BOSS_SPAWN_X[BOSS_COUNT] = {
+        1000, 400, 1600, 400, 1600,
+         400, 1600, 650, 1350, 650, 1350,
+         750, 1250,  750, 1250
+    };
+    static const short BOSS_SPAWN_Y[BOSS_COUNT] = {
+        1000, 450,  450, 1550, 1550,
+        1000, 1000, 700,  700, 1300, 1300,
+         900,  900, 1100, 1100
+    };
     for (int i = 0; i < BOSS_COUNT && total < MAX_NPCS; ++i, ++npc_id, ++total) {
         auto npc = std::make_shared<CNPC>();
         npc->m_id = npc_id;

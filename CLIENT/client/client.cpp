@@ -78,6 +78,7 @@ static QuestClient g_quests[2] = {
     { "Boss Hunter",  "보스 몬스터를 처치하라", "보상: 3000XP + 방어력 강화[5]", 0,  3, Q_ACTIVE }
 };
 static bool g_quest_panel_open = false;
+static bool g_map_open         = false;
 
 // ── 공격 이펙트 ───────────────────────────────────────────────────
 enum class EffectType { NONE, ATTACK, SKILL };
@@ -89,7 +90,9 @@ static VisualEffect g_effect;
 
 // ── 스프라이트 텍스처 (CC0 · Kenney Tiny Dungeon) ─────────────────
 struct GameTextures {
-    sf::Texture floor, wall;
+    sf::Texture floor;
+    sf::Texture wall;         // 소형 돌 장애물 (max dim <= 2)
+    sf::Texture castle_wall;  // 성벽 장애물 (벽돌 패턴)
     sf::Texture player_me, player_other;
     sf::Texture npc_peace, npc_agro;
     sf::Texture npc_boss, npc_boss_p3;
@@ -549,23 +552,25 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         }
     }
 
-    // 장애물 렌더링 — 벽 텍스처 반복
+    // 장애물 렌더링 — max(w,h)<=2: 돌(rock), 그 외: 성벽(castle_wall)
     {
         float vx0 = g_my_x - VSIZE / 2.f, vy0 = g_my_y - VSIZE / 2.f;
         float vx1 = vx0 + VSIZE,           vy1 = vy0 + VSIZE;
         sf::RectangleShape wall;
-        if (!g_tex.ok) {
-            wall.setFillColor(sf::Color(90, 75, 60));
-            wall.setOutlineColor(sf::Color(60, 50, 40));
-            wall.setOutlineThickness(0.04f);
-        }
         for (auto& r : g_obstacles) {
             if (r.x + r.w < vx0 || r.x > vx1) continue;
             if (r.y + r.h < vy0 || r.y > vy1) continue;
             wall.setSize(sf::Vector2f((float)r.w, (float)r.h));
+            bool is_rock = (std::max(r.w, r.h) <= 2);
             if (g_tex.ok) {
-                wall.setTexture(&g_tex.wall);
+                sf::Texture& tex = is_rock ? g_tex.wall : g_tex.castle_wall;
+                wall.setTexture(&tex);
                 wall.setTextureRect(sf::IntRect(0, 0, r.w * 16, r.h * 16));
+            } else {
+                wall.setFillColor(is_rock ? sf::Color(80, 65, 50)
+                                          : sf::Color(90, 85, 110));
+                wall.setOutlineColor(sf::Color(50, 40, 30));
+                wall.setOutlineThickness(0.04f);
             }
             wall.setPosition((float)r.x, (float)r.y);
             win.draw(wall);
@@ -650,37 +655,62 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
                     ? std::max(0.f, (float)s.info.hp / s.info.max_hp) : 0.f;
 
         if (s.info.npc_type == NPC_BOSS) {
-            // 페이즈별 틴트 + 스프라이트
-            sf::Color tint = (ratio > 0.66f) ? sf::Color(255, 255, 180)   // P1: 금빛
-                           : (ratio > 0.33f) ? sf::Color(255, 160,  60)   // P2: 주황
-                                             : sf::Color(255,  80,  80);   // P3: 붉은 분노
+            // 페이즈별 틴트
+            sf::Color tint = (ratio > 0.66f) ? sf::Color(255, 255, 180)
+                           : (ratio > 0.33f) ? sf::Color(255, 160,  60)
+                                             : sf::Color(255,  80,  80);
             sf::Texture& boss_tex = (ratio <= 0.33f) ? g_tex.npc_boss_p3 : g_tex.npc_boss;
 
-            // 보스 후광 원 (페이즈 강조)
-            float glow_r = 0.6f;
+            // 보스 후광 (2×2 크기에 맞게 확대)
+            float glow_r = 1.2f;
             sf::CircleShape glow(glow_r);
-            glow.setFillColor(sf::Color(tint.r/4, tint.g/4, tint.b/4, 160));
-            glow.setOutlineColor(sf::Color(tint.r, tint.g, tint.b, 180));
-            glow.setOutlineThickness(0.06f);
+            glow.setFillColor(sf::Color(tint.r/4, tint.g/4, tint.b/4, 140));
+            glow.setOutlineColor(sf::Color(tint.r, tint.g, tint.b, 200));
+            glow.setOutlineThickness(0.08f);
             glow.setPosition(wx + 0.5f - glow_r, wy + 0.5f - glow_r);
             win.draw(glow);
 
-            if (g_tex.ok) draw_spr(boss_tex, wx, wy, tint);
-            else {
-                sf::CircleShape bc(0.46f);
+            // 보스 스프라이트 2×2 타일
+            if (g_tex.ok) {
+                sf::Sprite spr(boss_tex);
+                spr.setScale(SPR_S * 2, SPR_S * 2);
+                spr.setColor(tint);
+                spr.setPosition(wx - 0.5f, wy - 0.5f);
+                win.draw(spr);
+            } else {
+                sf::CircleShape bc(0.9f);
                 bc.setFillColor(tint);
                 bc.setOutlineColor(sf::Color(255, 230, 80));
-                bc.setOutlineThickness(0.07f);
-                bc.setPosition(wx + 0.08f, wy + 0.08f);
+                bc.setOutlineThickness(0.10f);
+                bc.setPosition(wx - 0.4f, wy - 0.4f);
                 win.draw(bc);
             }
-            draw_hp_bar(win, wx, wy, s.info.hp, s.info.max_hp);
+
+            // 보스 HP바 (2타일 폭)
+            {
+                constexpr float BW = 1.8f, BH = 0.10f;
+                float bx0 = wx - 0.5f + 0.1f;
+                float by0 = wy - 0.5f - 0.18f;
+                sf::RectangleShape bg({ BW, BH });
+                bg.setFillColor(sf::Color(80, 0, 0));
+                bg.setPosition(bx0, by0);
+                win.draw(bg);
+                if (ratio > 0.f) {
+                    sf::RectangleShape bar({ BW * ratio, BH });
+                    bar.setFillColor(ratio > 0.5f ? sf::Color(0, 200, 50)
+                                   : ratio > 0.25f ? sf::Color(220, 180, 0)
+                                   : sf::Color(220, 40, 40));
+                    bar.setPosition(bx0, by0);
+                    win.draw(bar);
+                }
+            }
             continue;
         }
 
         if (s.info.npc_type == NPC_PC) {
             if (g_tex.ok) draw_spr(g_tex.player_other, wx, wy);
             else          draw_rect(wx, wy, sf::Color(55, 185, 80));
+            draw_hp_bar(win, wx, wy, s.info.hp, s.info.max_hp);
         } else if (s.info.npc_type == NPC_AGRO) {
             sf::Color tint = (s.info.npc_state == NPC_STATE_CHASE)
                            ? sf::Color(255, 120, 120)   // 추격: 붉은 틴트
@@ -1082,7 +1112,7 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
 
     // 조작 힌트
     char hint_buf[128];
-    sprintf_s(hint_buf, "ID:%-4d X:%-4d Y:%-4d  [Arrow]Move [A]Atk [S]Skill [1-6]Item [Q]Quest [T]Chat",
+    sprintf_s(hint_buf, "ID:%-4d X:%-4d Y:%-4d  [Arrow]Move [A]Atk [S]Skill [Q]Quest [M]Map [T]Chat",
               g_my_id, g_my_x, g_my_y);
     sf::Text hint_text(hint_buf, font, 11);
     hint_text.setFillColor(sf::Color(100, 105, 130));
@@ -1154,6 +1184,102 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         chat_text.setPosition(14.f, chat_y + 4.f);
         win.draw(chat_text);
     }
+
+    // ── M키 월드 지도 오버레이 ────────────────────────────────────────
+    if (g_map_open) {
+        constexpr float MM_PAD  = 18.f;
+        constexpr float MM_SIZE = (float)WIN_W - MM_PAD * 2;   // 504 px
+        constexpr float MM_X    = MM_PAD;
+        constexpr float MM_Y    = MM_PAD;
+        constexpr float MM_S    = MM_SIZE / (float)WORLD_WIDTH; // 504/2000 = 0.252
+
+        // 반투명 배경 (게임 뷰 영역 전체)
+        sf::RectangleShape mm_bg({ (float)WIN_W, (float)(WIN_H - UI_H) });
+        mm_bg.setFillColor(sf::Color(0, 0, 0, 210));
+        mm_bg.setPosition(0.f, 0.f);
+        win.draw(mm_bg);
+
+        // 맵 외곽선
+        sf::RectangleShape mm_border({ MM_SIZE + 2.f, MM_SIZE + 2.f });
+        mm_border.setFillColor(sf::Color(10, 10, 18));
+        mm_border.setOutlineColor(sf::Color(90, 90, 140));
+        mm_border.setOutlineThickness(1.5f);
+        mm_border.setPosition(MM_X - 1.f, MM_Y - 1.f);
+        win.draw(mm_border);
+
+        // 장애물 (성벽만 표시, 소형 돌은 생략)
+        for (auto& r : g_obstacles) {
+            bool is_rock = (std::max(r.w, r.h) <= 2);
+            float obs_w = r.w * MM_S;
+            float obs_h = r.h * MM_S;
+            if (is_rock) {
+                if (obs_w < 1.5f) obs_w = 1.5f;
+                if (obs_h < 1.5f) obs_h = 1.5f;
+            }
+            sf::RectangleShape obs({ obs_w, obs_h });
+            obs.setFillColor(is_rock ? sf::Color(80, 65, 50, 200)
+                                     : sf::Color(100, 95, 130, 240));
+            obs.setPosition(MM_X + r.x * MM_S, MM_Y + r.y * MM_S);
+            win.draw(obs);
+        }
+
+        // 다른 오브젝트
+        {
+            std::lock_guard<std::mutex> lk(g_objs_lock);
+            for (auto& [id, o] : g_objs) {
+                float dot_r;
+                sf::Color dc;
+                if (o.npc_type == NPC_PC) {
+                    dc = sf::Color(80, 220, 80);   dot_r = 3.5f;
+                } else if (o.npc_type == NPC_BOSS) {
+                    dc = sf::Color(255, 215, 0);   dot_r = 5.f;
+                } else {
+                    continue;  // Peace/Agro는 미니맵 생략
+                }
+                sf::CircleShape dot(dot_r);
+                dot.setFillColor(dc);
+                dot.setPosition(MM_X + o.x * MM_S - dot_r, MM_Y + o.y * MM_S - dot_r);
+                win.draw(dot);
+            }
+        }
+
+        // 내 위치 (흰 테두리 파란 점)
+        constexpr float MY_R = 5.f;
+        sf::CircleShape my_dot(MY_R);
+        my_dot.setFillColor(sf::Color(80, 140, 255));
+        my_dot.setOutlineColor(sf::Color::White);
+        my_dot.setOutlineThickness(1.5f);
+        my_dot.setPosition(MM_X + g_my_x * MM_S - MY_R, MM_Y + g_my_y * MM_S - MY_R);
+        win.draw(my_dot);
+
+        // 범례 & 안내
+        sf::Text mm_title("  World Map  [M] to close", font, 11);
+        mm_title.setFillColor(sf::Color(170, 175, 220));
+        mm_title.setPosition(MM_X, MM_Y + MM_SIZE + 4.f);
+        win.draw(mm_title);
+
+        // 범례 점들
+        struct Legend { float r; sf::Color c; const char* label; };
+        static const Legend legends[] = {
+            { 5.f, sf::Color(80, 140, 255), "You" },
+            { 3.5f, sf::Color(80, 220, 80), "Player" },
+            { 5.f, sf::Color(255, 215, 0),  "Boss" },
+        };
+        float lx = MM_X + MM_SIZE - 130.f;
+        float ly = MM_Y + MM_SIZE + 2.f;
+        sf::Text leg("", font, 10);
+        for (auto& l : legends) {
+            sf::CircleShape ld(l.r * 0.6f);
+            ld.setFillColor(l.c);
+            ld.setPosition(lx, ly + 1.f);
+            win.draw(ld);
+            leg.setString(l.label);
+            leg.setFillColor(sf::Color(190, 195, 210));
+            leg.setPosition(lx + l.r * 1.4f, ly);
+            win.draw(leg);
+            lx += leg.getLocalBounds().width + l.r * 1.4f + 10.f;
+        }
+    }
 }
 
 // ── main ──────────────────────────────────────────────────────────
@@ -1179,18 +1305,20 @@ int main()
     {
         const std::string BASE = "assets/sprites/";
         g_tex.ok =
-            g_tex.floor.loadFromFile(BASE + "floor.png")        &&
-            g_tex.wall.loadFromFile(BASE + "wall.png")          &&
-            g_tex.player_me.loadFromFile(BASE + "player_me.png")    &&
+            g_tex.floor.loadFromFile(BASE + "floor.png")             &&
+            g_tex.wall.loadFromFile(BASE + "wall.png")               &&
+            g_tex.castle_wall.loadFromFile(BASE + "castle_wall.png") &&
+            g_tex.player_me.loadFromFile(BASE + "player_me.png")     &&
             g_tex.player_other.loadFromFile(BASE + "player_other.png") &&
-            g_tex.npc_peace.loadFromFile(BASE + "npc_peace.png")    &&
-            g_tex.npc_agro.loadFromFile(BASE + "npc_agro.png")      &&
-            g_tex.npc_boss.loadFromFile(BASE + "npc_boss.png")      &&
+            g_tex.npc_peace.loadFromFile(BASE + "npc_peace.png")     &&
+            g_tex.npc_agro.loadFromFile(BASE + "npc_agro.png")       &&
+            g_tex.npc_boss.loadFromFile(BASE + "npc_boss.png")       &&
             g_tex.npc_boss_p3.loadFromFile(BASE + "npc_boss_p3.png") &&
             g_tex.item_potion.loadFromFile(BASE + "item_potion.png");
         // 픽셀아트 — 확대 시 최근접 필터 유지
-        g_tex.floor.setSmooth(false);  g_tex.floor.setRepeated(true);
-        g_tex.wall.setSmooth(false);   g_tex.wall.setRepeated(true);
+        g_tex.floor.setSmooth(false);        g_tex.floor.setRepeated(true);
+        g_tex.wall.setSmooth(false);         g_tex.wall.setRepeated(true);
+        g_tex.castle_wall.setSmooth(false);  g_tex.castle_wall.setRepeated(true);
         g_tex.player_me.setSmooth(false);
         g_tex.player_other.setSmooth(false);
         g_tex.npc_peace.setSmooth(false);
@@ -1287,6 +1415,9 @@ int main()
                             if (g_inventory[5] > 0) send_use_item(ITEM_SPD_BOOST);  break;
                         case sf::Keyboard::Q:
                             g_quest_panel_open = !g_quest_panel_open;
+                            break;
+                        case sf::Keyboard::M:
+                            g_map_open = !g_map_open;
                             break;
                         case sf::Keyboard::T:
                             g_chat_mode = true;

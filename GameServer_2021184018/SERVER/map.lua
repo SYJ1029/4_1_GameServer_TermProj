@@ -110,6 +110,22 @@ for gi = 0, 12 do
 end
 -- placed count is printed by C++ (g_obstacle_rects.size())
 
+-- ── Scattered rock obstacles (1×1 ~ 2×2) ────────────────────────
+-- These are distinguished on the client by max(w,h)<=2 → rock texture
+math.randomseed(31415)
+local rock_placed = 0
+for _ = 1, 600 do
+    local rx = math.random(30, 1970)
+    local ry = math.random(30, 1970)
+    -- stay away from spawn corridor and castle interiors
+    if not is_excluded(rx, ry) then
+        local rw = math.random(1, 2)
+        local rh = math.random(1, 2)
+        rect(rx, ry, rw, rh)
+        rock_placed = rock_placed + 1
+    end
+end
+
 -- ── NPC spawn zones ───────────────────────────────────────────────
 npc_groups = {
     ------------------------------------------------------------
