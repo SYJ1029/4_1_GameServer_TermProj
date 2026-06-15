@@ -399,10 +399,19 @@ void process_npc_respawn(int npc_id)
         npc->m_x = npc->m_origin_x;
         npc->m_y = npc->m_origin_y;
     } else {
-        npc->m_x        = static_cast<short>(rand() % WORLD_WIDTH);
-        npc->m_y        = static_cast<short>(rand() % WORLD_HEIGHT);
-        npc->m_origin_x = npc->m_x;
-        npc->m_origin_y = npc->m_y;
+        // 일반 NPC: 원래 스폰 위치 ±80 반경 내 비장애물 위치에 부활
+        constexpr int RESPAWN_RANGE = 80;
+        short rx = npc->m_origin_x, ry = npc->m_origin_y;
+        for (int tries = 0; tries < 100; ++tries) {
+            short cx = npc->m_origin_x + (short)(rand() % (RESPAWN_RANGE * 2 + 1) - RESPAWN_RANGE);
+            short cy = npc->m_origin_y + (short)(rand() % (RESPAWN_RANGE * 2 + 1) - RESPAWN_RANGE);
+            cx = (short)std::max(1, std::min((int)cx, WORLD_WIDTH  - 1));
+            cy = (short)std::max(1, std::min((int)cy, WORLD_HEIGHT - 1));
+            if (!is_obstacle(cx, cy)) { rx = cx; ry = cy; break; }
+        }
+        npc->m_x = rx;
+        npc->m_y = ry;
+        // m_origin_x/y 유지 — 로밍 범위의 기준점을 초기 스폰 위치로 고정
     }
     sector_manager.add_object_to_sector(npc_id, npc->m_x, npc->m_y);
     // wake_up은 플레이어가 근처에 왔을 때 자동으로 호출됨

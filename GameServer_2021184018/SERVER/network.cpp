@@ -244,9 +244,9 @@ void worker_thread()
 			}
 			cl->m_x      = exp_over->m_db_result.x;
 			cl->m_y      = exp_over->m_db_result.y;
-			cl->m_hp     = exp_over->m_db_result.hp;
-			cl->m_max_hp = PC_MAX_HP;
 			cl->m_level  = exp_over->m_db_result.level;
+			cl->m_max_hp = calc_max_hp(cl->m_level);
+			cl->m_hp     = std::min(exp_over->m_db_result.hp, (short)cl->m_max_hp);
 			cl->m_xp     = exp_over->m_db_result.exp;
 			for (int i = 0; i < ITEM_SLOT_COUNT; ++i)
 				cl->m_inventory[i] = exp_over->m_db_result.inventory[i];

@@ -91,8 +91,9 @@ static VisualEffect g_effect;
 // ── 스프라이트 텍스처 (CC0 · Kenney Tiny Dungeon) ─────────────────
 struct GameTextures {
     sf::Texture floor;
-    sf::Texture wall;         // 소형 돌 장애물 (max dim <= 2)
+    sf::Texture wall;         // 소형 돌 장애물 (max dim 2, not 1×1)
     sf::Texture castle_wall;  // 성벽 장애물 (벽돌 패턴)
+    sf::Texture pillar;       // 성채 내부 1×1 기둥
     sf::Texture player_me, player_other;
     sf::Texture npc_peace, npc_agro;
     sf::Texture npc_boss, npc_boss_p3;
@@ -561,9 +562,11 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
             if (r.x + r.w < vx0 || r.x > vx1) continue;
             if (r.y + r.h < vy0 || r.y > vy1) continue;
             wall.setSize(sf::Vector2f((float)r.w, (float)r.h));
-            bool is_rock = (std::max(r.w, r.h) <= 2);
+            bool is_pillar = (r.w == 1 && r.h == 1);
+            bool is_rock   = (!is_pillar && std::max(r.w, r.h) <= 2);
             if (g_tex.ok) {
-                sf::Texture& tex = is_rock ? g_tex.wall : g_tex.castle_wall;
+                sf::Texture& tex = is_pillar ? g_tex.pillar
+                                 : (is_rock   ? g_tex.wall : g_tex.castle_wall);
                 wall.setTexture(&tex);
                 wall.setTextureRect(sf::IntRect(0, 0, r.w * 16, r.h * 16));
             } else {
@@ -1207,18 +1210,26 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         mm_border.setPosition(MM_X - 1.f, MM_Y - 1.f);
         win.draw(mm_border);
 
-        // 장애물 (성벽만 표시, 소형 돌은 생략)
+        // 장애물 색상 분류 (크기 기반 휴리스틱)
+        // w==1 && h==1   : 성채 내부 기둥  → 금색
+        // max(w,h) <=2   : 소형 돌부리     → 갈색
+        // max(w,h) <= 40 : 격자 소형 성채  → 파란 회색
+        // max(w,h) <= 200: Named Zone 성벽 → 밝은 청록
+        // max(w,h) > 200 : 맵 테두리       → 빨간색
+        auto obs_color = [](const ObstacleRect& r) -> sf::Color {
+            if (r.w == 1 && r.h == 1) return sf::Color(255, 200,  60, 240);
+            int md = std::max(r.w, r.h);
+            if (md <= 2)   return sf::Color(190, 140,  80, 230);
+            if (md <= 40)  return sf::Color( 80, 100, 190, 200);
+            if (md <= 200) return sf::Color( 50, 210, 240, 255);
+            return             sf::Color(220,  50,  50, 255);
+        };
+
         for (auto& r : g_obstacles) {
-            bool is_rock = (std::max(r.w, r.h) <= 2);
-            float obs_w = r.w * MM_S;
-            float obs_h = r.h * MM_S;
-            if (is_rock) {
-                if (obs_w < 1.5f) obs_w = 1.5f;
-                if (obs_h < 1.5f) obs_h = 1.5f;
-            }
+            float obs_w = std::max(1.5f, r.w * MM_S);
+            float obs_h = std::max(1.5f, r.h * MM_S);
             sf::RectangleShape obs({ obs_w, obs_h });
-            obs.setFillColor(is_rock ? sf::Color(80, 65, 50, 200)
-                                     : sf::Color(100, 95, 130, 240));
+            obs.setFillColor(obs_color(r));
             obs.setPosition(MM_X + r.x * MM_S, MM_Y + r.y * MM_S);
             win.draw(obs);
         }
@@ -1252,32 +1263,48 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         my_dot.setPosition(MM_X + g_my_x * MM_S - MY_R, MM_Y + g_my_y * MM_S - MY_R);
         win.draw(my_dot);
 
-        // 범례 & 안내
-        sf::Text mm_title("  World Map  [M] to close", font, 11);
+        // 타이틀 (지도 위)
+        sf::Text mm_title("  World Map   [M] to close", font, 11);
         mm_title.setFillColor(sf::Color(170, 175, 220));
-        mm_title.setPosition(MM_X, MM_Y + MM_SIZE + 4.f);
+        mm_title.setPosition(MM_X, 3.f);
         win.draw(mm_title);
 
-        // 범례 점들
-        struct Legend { float r; sf::Color c; const char* label; };
-        static const Legend legends[] = {
-            { 5.f, sf::Color(80, 140, 255), "You" },
-            { 3.5f, sf::Color(80, 220, 80), "Player" },
-            { 5.f, sf::Color(255, 215, 0),  "Boss" },
+        // 범례 — 장애물 4종 + 오브젝트 3종
+        struct LegEntry { sf::Color c; const char* label; bool is_circle; };
+        static const LegEntry legends[] = {
+            // 장애물
+            { sf::Color(220,  50,  50, 255), "Border",    false },
+            { sf::Color( 50, 210, 240, 255), "Zone Wall", false },
+            { sf::Color( 80, 100, 190, 200), "Castle",    false },
+            { sf::Color(190, 140,  80, 230), "Rock",      false },
+            { sf::Color(255, 200,  60, 240), "Pillar",    false },
+            // 오브젝트
+            { sf::Color( 80, 140, 255),      "You",       true  },
+            { sf::Color( 80, 220,  80),      "Player",    true  },
+            { sf::Color(255, 215,   0),      "Boss",      true  },
         };
-        float lx = MM_X + MM_SIZE - 130.f;
-        float ly = MM_Y + MM_SIZE + 2.f;
+
+        float lx = MM_X;
+        float ly = MM_Y + MM_SIZE + 4.f;
         sf::Text leg("", font, 10);
         for (auto& l : legends) {
-            sf::CircleShape ld(l.r * 0.6f);
-            ld.setFillColor(l.c);
-            ld.setPosition(lx, ly + 1.f);
-            win.draw(ld);
+            constexpr float SW = 8.f, SH = 8.f;
+            if (l.is_circle) {
+                sf::CircleShape ld(SW / 2.f);
+                ld.setFillColor(l.c);
+                ld.setPosition(lx, ly);
+                win.draw(ld);
+            } else {
+                sf::RectangleShape ld({ SW, SH });
+                ld.setFillColor(l.c);
+                ld.setPosition(lx, ly);
+                win.draw(ld);
+            }
             leg.setString(l.label);
-            leg.setFillColor(sf::Color(190, 195, 210));
-            leg.setPosition(lx + l.r * 1.4f, ly);
+            leg.setFillColor(sf::Color(200, 205, 220));
+            leg.setPosition(lx + SW + 2.f, ly - 1.f);
             win.draw(leg);
-            lx += leg.getLocalBounds().width + l.r * 1.4f + 10.f;
+            lx += SW + 4.f + leg.getLocalBounds().width + 6.f;
         }
     }
 }
@@ -1308,6 +1335,7 @@ int main()
             g_tex.floor.loadFromFile(BASE + "floor.png")             &&
             g_tex.wall.loadFromFile(BASE + "wall.png")               &&
             g_tex.castle_wall.loadFromFile(BASE + "castle_wall.png") &&
+            g_tex.pillar.loadFromFile(BASE + "pillar.png")           &&
             g_tex.player_me.loadFromFile(BASE + "player_me.png")     &&
             g_tex.player_other.loadFromFile(BASE + "player_other.png") &&
             g_tex.npc_peace.loadFromFile(BASE + "npc_peace.png")     &&
@@ -1319,6 +1347,7 @@ int main()
         g_tex.floor.setSmooth(false);        g_tex.floor.setRepeated(true);
         g_tex.wall.setSmooth(false);         g_tex.wall.setRepeated(true);
         g_tex.castle_wall.setSmooth(false);  g_tex.castle_wall.setRepeated(true);
+        g_tex.pillar.setSmooth(false);       g_tex.pillar.setRepeated(true);
         g_tex.player_me.setSmooth(false);
         g_tex.player_other.setSmooth(false);
         g_tex.npc_peace.setSmooth(false);

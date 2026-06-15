@@ -249,6 +249,8 @@ static void process_quest_kill(SESSION* player, int npc_type_int)
         player->m_xp += xp;
         while (player->m_xp >= player->exp_for_next_level())
             player->m_xp -= player->exp_for_next_level(), ++player->m_level;
+        player->m_max_hp = calc_max_hp(player->m_level);
+        player->m_hp     = player->m_max_hp;
 
         // 보상 아이템 인벤토리에 추가
         ITEM_TYPE ritem = reward_items[qid];
@@ -413,7 +415,8 @@ bool SESSION::process_packet(unsigned char* p)
             if (!is_cardinal) continue;
 
             CNPC* npc  = to_npc(target_obj);
-            short dmg  = (system_clock::now() < m_atk_boost_until) ? PC_ATTACK_DMG * 2 : PC_ATTACK_DMG;
+            short base_atk = calc_atk_dmg(m_level);
+            short dmg  = (system_clock::now() < m_atk_boost_until) ? base_atk * 2 : base_atk;
             npc->m_hp -= dmg;
             short rem  = npc->m_hp;
 
@@ -432,6 +435,8 @@ bool SESSION::process_packet(unsigned char* p)
                 m_xp += xp_gain;
                 while (m_xp >= exp_for_next_level())
                     m_xp -= exp_for_next_level(), ++m_level;
+                m_max_hp = calc_max_hp(m_level);
+                m_hp     = m_max_hp;
 
                 // 퀘스트 진행
                 process_quest_kill(this, npc_type_snapshot);
@@ -480,7 +485,8 @@ bool SESSION::process_packet(unsigned char* p)
             if (dx > 1 || dy > 1) continue;
 
             CNPC* npc  = to_npc(target_obj);
-            short dmg  = (system_clock::now() < m_atk_boost_until) ? PC_SKILL_DMG * 2 : PC_SKILL_DMG;
+            short base_skill = calc_skill_dmg(m_level);
+            short dmg  = (system_clock::now() < m_atk_boost_until) ? base_skill * 2 : base_skill;
             npc->m_hp -= dmg;
             short rem  = npc->m_hp;
 
@@ -497,6 +503,8 @@ bool SESSION::process_packet(unsigned char* p)
                 m_xp += xp_gain;
                 while (m_xp >= exp_for_next_level())
                     m_xp -= exp_for_next_level(), ++m_level;
+                m_max_hp = calc_max_hp(m_level);
+                m_hp     = m_max_hp;
 
                 process_quest_kill(this, npc_type_snapshot);
 

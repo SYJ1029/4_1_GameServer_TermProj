@@ -64,6 +64,11 @@ constexpr short PC_ATTACK_DMG     = 15;
 constexpr short PC_SKILL_DMG      = 30;   // 3x3 광역기
 constexpr int   SKILL_COOL_TIME   = 3000; // 3초
 constexpr short NPC_ATTACK_DMG    = 8;
+
+// 레벨 비례 스탯 (DB 로드 시 / 레벨업 시 적용)
+inline short calc_max_hp(int lv)    { return PC_MAX_HP    + (short)((lv - 1) * 10); }
+inline short calc_atk_dmg(int lv)   { return PC_ATTACK_DMG + (short)((lv - 1) * 2); }
+inline short calc_skill_dmg(int lv) { return PC_SKILL_DMG  + (short)((lv - 1) * 3); }
 constexpr short HP_POTION_RESTORE    = 30;   // HP 포션 회복량
 constexpr short HP_HI_POTION_RESTORE = 60;   // 대형 HP 포션 회복량
 
