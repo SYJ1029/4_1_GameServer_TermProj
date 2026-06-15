@@ -11,11 +11,13 @@ constexpr int MAX_CHAT_LEN   = 128;
 
 enum PACKET_TYPE {
     C2S_LOGIN, C2S_MOVE, C2S_CHAT, C2S_ATTACK, C2S_SKILL, C2S_USE_ITEM,
+    C2S_RANGED_ATTACK,
     S2C_LOGIN_RESULT, S2C_AVATAR_INFO,
     S2C_ADD_PLAYER, S2C_REMOVE_PLAYER, S2C_MOVE_PLAYER,
     S2C_CHAT, S2C_STAT_INFO, S2C_DAMAGE_INFO,
     S2C_ITEM_APPEAR, S2C_ITEM_REMOVE, S2C_ITEM_ADD,
-    S2C_QUEST_UPDATE
+    S2C_QUEST_UPDATE,
+    S2C_PROJECTILE
 };
 
 // 퀘스트 상태 (DB 연동 시 그대로 컬럼으로 사용)
@@ -102,6 +104,7 @@ struct S2C_AvatarInfo {
     int           level;
     int           exp;
     int           exp_next;
+    DIRECTION     dir;
 };
 
 struct S2C_AddPlayer {
@@ -115,6 +118,7 @@ struct S2C_AddPlayer {
     short         max_hp;
     NPC_KIND      npc_type;    // 0=player, 1=peace, 2=agro
     NPC_STATE     npc_state;   // IDLE/ROAMING/CHASE
+    DIRECTION     dir;
 };
 
 struct S2C_RemovePlayer {
@@ -130,6 +134,7 @@ struct S2C_MovePlayer {
     short         x;
     short         y;
     int           move_time;
+    DIRECTION     dir;
 };
 
 struct S2C_Chat {
@@ -195,6 +200,22 @@ struct S2C_QuestUpdate {
     QUEST_STATE   state;
     int           current;    // 현재 킬 수
     int           target;     // 목표 킬 수
+};
+
+struct C2S_RangedAttack {
+    unsigned char size;
+    PACKET_TYPE   type;
+};
+
+// 원거리 공격 궤적: 발사자 기준 모든 인접 플레이어에게 브로드캐스트
+struct S2C_Projectile {
+    unsigned char size;
+    PACKET_TYPE   type;
+    int           attacker_id;
+    short         sx, sy;    // 발사 위치
+    DIRECTION     dir;       // 발사 방향
+    short         range;     // 이동 거리 (장애물/맵 경계 포함)
+    int           hit_id;    // 피격 NPC id (-1=빗나감)
 };
 
 #pragma pack(pop)

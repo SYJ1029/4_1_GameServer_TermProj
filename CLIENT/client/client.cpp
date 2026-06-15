@@ -9,6 +9,7 @@
 #include <ws2tcpip.h>
 #include <SFML/Graphics.hpp>
 #include <unordered_map>
+#include <array>
 #include <vector>
 #include <mutex>
 #include <thread>
@@ -29,6 +30,7 @@ struct ObjInfo {
     short         hp, max_hp;
     NPC_KIND      npc_type;   // NPC_PC=0, NPC_PEACE=1, NPC_AGRO=2
     NPC_STATE     npc_state;  // NPC_STATE_IDLE/ROAMING/CHASE
+    DIRECTION     dir = DOWN;
 };
 
 // ── 전역 상태 ─────────────────────────────────────────────────────
@@ -37,6 +39,7 @@ static std::atomic<bool> g_running  { false };
 static int               g_my_id    = -1;
 static short             g_my_x     = 0, g_my_y = 0;
 static short             g_my_hp    = 100, g_my_max_hp = 100;
+static DIRECTION         g_my_dir   = DOWN;
 static int               g_my_level  = 1;
 static int               g_my_xp     = 0;
 static int               g_my_exp_next = 100;
@@ -87,6 +90,19 @@ struct VisualEffect {
     std::chrono::steady_clock::time_point start;
 };
 static VisualEffect g_effect;
+
+// ── 원거리 투사체 이펙트 ──────────────────────────────────────────
+struct ProjEffect {
+    bool      active = false;
+    short     sx, sy;
+    DIRECTION dir;
+    short     range;
+    std::chrono::steady_clock::time_point start;
+};
+static ProjEffect g_proj;
+constexpr int RANGED_CD_MS = 2000;
+static std::chrono::steady_clock::time_point g_last_ranged_time =
+    std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
 // ── 스프라이트 텍스처 (CC0 · Kenney Tiny Dungeon) ─────────────────
 struct GameTextures {
@@ -192,6 +208,14 @@ static void send_skill()
     net_send(&p, p.size);
 }
 
+static void send_ranged_attack()
+{
+    C2S_RangedAttack p{};
+    p.size = sizeof(p);
+    p.type = C2S_RANGED_ATTACK;
+    net_send(&p, p.size);
+}
+
 static void send_use_item(ITEM_TYPE item_type)
 {
     C2S_UseItem p{};
@@ -245,6 +269,7 @@ static void handle_packet(unsigned char* p)
         g_my_level    = pkt->level;
         g_my_xp       = pkt->exp;
         g_my_exp_next = pkt->exp_next;
+        g_my_dir      = pkt->dir;
         break;
     }
     case S2C_ADD_PLAYER:
@@ -258,6 +283,7 @@ static void handle_packet(unsigned char* p)
         o.max_hp    = pkt->max_hp;
         o.npc_type  = pkt->npc_type;
         o.npc_state = pkt->npc_state;
+        o.dir       = pkt->dir;
         strncpy_s(o.name, pkt->username, MAX_NAME_LEN - 1);
         std::lock_guard<std::mutex> lk(g_objs_lock);
         g_objs[o.id] = o;
@@ -274,16 +300,29 @@ static void handle_packet(unsigned char* p)
     {
         auto* pkt = reinterpret_cast<S2C_MovePlayer*>(p);
         if (pkt->playerId == g_my_id) {
-            g_my_x = pkt->x;
-            g_my_y = pkt->y;
+            g_my_x   = pkt->x;
+            g_my_y   = pkt->y;
+            g_my_dir = pkt->dir;
         } else {
             std::lock_guard<std::mutex> lk(g_objs_lock);
             auto it = g_objs.find(pkt->playerId);
             if (it != g_objs.end()) {
-                it->second.x = pkt->x;
-                it->second.y = pkt->y;
+                it->second.x   = pkt->x;
+                it->second.y   = pkt->y;
+                it->second.dir = pkt->dir;
             }
         }
+        break;
+    }
+    case S2C_PROJECTILE:
+    {
+        auto* pkt = reinterpret_cast<S2C_Projectile*>(p);
+        g_proj.active = true;
+        g_proj.sx     = pkt->sx;
+        g_proj.sy     = pkt->sy;
+        g_proj.dir    = pkt->dir;
+        g_proj.range  = pkt->range;
+        g_proj.start  = std::chrono::steady_clock::now();
         break;
     }
     case S2C_CHAT:
@@ -635,6 +674,25 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         for (auto& [id, o] : g_objs) snaps.push_back({ o });
     }
 
+    // 방향 화살표 (삼각형 인디케이터)
+    auto draw_dir_arrow = [&](float wx, float wy, DIRECTION dir, sf::Color color) {
+        constexpr float SZ = 0.16f;
+        float ax = wx + 0.5f, ay = wy + 0.5f;
+        switch (dir) {
+        case UP:    ay -= 0.55f; break;
+        case DOWN:  ay += 0.55f; break;
+        case LEFT:  ax -= 0.55f; break;
+        case RIGHT: ax += 0.55f; break;
+        }
+        sf::CircleShape arr(SZ, 3);
+        arr.setFillColor(color);
+        arr.setOrigin(SZ, SZ);
+        arr.setPosition(ax, ay);
+        float rot = (dir == UP ? 0.f : dir == RIGHT ? 90.f : dir == DOWN ? 180.f : 270.f);
+        arr.setRotation(rot);
+        win.draw(arr);
+    };
+
     // 스프라이트 드로우 헬퍼
     auto draw_spr = [&](sf::Texture& tex, float wx, float wy,
                         sf::Color tint = sf::Color::White) {
@@ -713,18 +771,21 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         if (s.info.npc_type == NPC_PC) {
             if (g_tex.ok) draw_spr(g_tex.player_other, wx, wy);
             else          draw_rect(wx, wy, sf::Color(55, 185, 80));
+            draw_dir_arrow(wx, wy, s.info.dir, sf::Color(100, 220, 100, 200));
             draw_hp_bar(win, wx, wy, s.info.hp, s.info.max_hp);
         } else if (s.info.npc_type == NPC_AGRO) {
             sf::Color tint = (s.info.npc_state == NPC_STATE_CHASE)
-                           ? sf::Color(255, 120, 120)   // 추격: 붉은 틴트
+                           ? sf::Color(255, 120, 120)
                            : sf::Color::White;
             if (g_tex.ok) draw_spr(g_tex.npc_agro, wx, wy, tint);
             else          draw_rect(wx, wy, (s.info.npc_state == NPC_STATE_CHASE)
                                             ? sf::Color(255, 40, 40) : sf::Color(200, 100, 30));
+            draw_dir_arrow(wx, wy, s.info.dir, sf::Color(255, 100, 100, 180));
             draw_hp_bar(win, wx, wy, s.info.hp, s.info.max_hp);
         } else { // PEACE
             if (g_tex.ok) draw_spr(g_tex.npc_peace, wx, wy);
             else          draw_rect(wx, wy, sf::Color(120, 140, 90));
+            draw_dir_arrow(wx, wy, s.info.dir, sf::Color(140, 200, 120, 160));
             draw_hp_bar(win, wx, wy, s.info.hp, s.info.max_hp);
         }
     }
@@ -740,6 +801,7 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
     }
     if (g_tex.ok) draw_spr(g_tex.player_me, (float)g_my_x, (float)g_my_y);
     else          draw_rect((float)g_my_x, (float)g_my_y, sf::Color(70, 115, 255));
+    draw_dir_arrow((float)g_my_x, (float)g_my_y, g_my_dir, sf::Color(160, 200, 255, 220));
     draw_hp_bar(win, (float)g_my_x, (float)g_my_y, g_my_hp, g_my_max_hp);
 
     // ── 공격/스킬 이펙트 ──────────────────────────────────────────
@@ -754,24 +816,30 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
             sf::Uint8 a = (sf::Uint8)(255 * t);
 
             if (g_effect.type == EffectType::ATTACK) {
-                // 4방향 플래시 타일
+                // 방향성 정면 호(arc) 플래시 — 3타일
                 sf::RectangleShape flash(sf::Vector2f(0.92f, 0.92f));
                 flash.setFillColor(sf::Color(255, 220, 60, (sf::Uint8)(160 * t)));
                 flash.setOutlineColor(sf::Color(255, 120, 0, a));
                 flash.setOutlineThickness(0.05f);
-                const int dirs[4][2] = {{0,-1},{0,1},{-1,0},{1,0}};
-                for (auto& d : dirs) {
+                std::array<std::array<int, 2>, 3> arc_tiles{};
+                switch (g_my_dir) {
+                case UP:    arc_tiles[0]={-1,-1}; arc_tiles[1]={0,-1}; arc_tiles[2]={1,-1}; break;
+                case DOWN:  arc_tiles[0]={-1, 1}; arc_tiles[1]={0, 1}; arc_tiles[2]={1, 1}; break;
+                case LEFT:  arc_tiles[0]={-1,-1}; arc_tiles[1]={-1,0}; arc_tiles[2]={-1,1}; break;
+                case RIGHT: arc_tiles[0]={ 1,-1}; arc_tiles[1]={ 1,0}; arc_tiles[2]={ 1,1}; break;
+                }
+                for (auto& d : arc_tiles) {
                     flash.setPosition(g_my_x + d[0] + 0.04f, g_my_y + d[1] + 0.04f);
                     win.draw(flash);
                 }
-                // 십자 슬래시 선 (가로 / 세로)
-                sf::RectangleShape slash(sf::Vector2f(3.1f, 0.10f));
+                // 방향성 슬래시 선
+                bool is_horiz = (g_my_dir == LEFT || g_my_dir == RIGHT);
+                sf::RectangleShape slash(is_horiz ? sf::Vector2f(0.10f, 3.1f)
+                                                  : sf::Vector2f(3.1f, 0.10f));
                 slash.setFillColor(sf::Color(255, 255, 220, a));
-                slash.setOrigin(1.55f, 0.05f);
+                slash.setOrigin(is_horiz ? sf::Vector2f(0.05f, 1.55f)
+                                         : sf::Vector2f(1.55f, 0.05f));
                 slash.setPosition(g_my_x + 0.5f, g_my_y + 0.5f);
-                win.draw(slash);
-                slash.setSize(sf::Vector2f(0.10f, 3.1f));
-                slash.setOrigin(0.05f, 1.55f);
                 win.draw(slash);
 
             } else { // SKILL
@@ -809,6 +877,52 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
             }
         } else {
             g_effect.type = EffectType::NONE;
+        }
+    }
+
+    // ── 원거리 투사체 이펙트 ──────────────────────────────────────────
+    if (g_proj.active) {
+        using ms = std::chrono::milliseconds;
+        int eff_ms = (int)std::chrono::duration_cast<ms>(
+            std::chrono::steady_clock::now() - g_proj.start).count();
+        constexpr int PROJ_DUR = 300;
+        if (eff_ms < PROJ_DUR) {
+            float t2 = 1.f - (float)eff_ms / PROJ_DUR;
+            sf::Uint8 a2 = (sf::Uint8)(255 * t2);
+
+            float ddx = (g_proj.dir == LEFT ? -1.f : g_proj.dir == RIGHT ? 1.f : 0.f);
+            float ddy = (g_proj.dir == UP   ? -1.f : g_proj.dir == DOWN  ? 1.f : 0.f);
+            float src_x = g_proj.sx + 0.5f;
+            float src_y = g_proj.sy + 0.5f;
+            float len   = (float)g_proj.range;
+
+            // 빔 (수평/수직)
+            sf::RectangleShape beam;
+            if (ddx != 0.f) {
+                beam.setSize(sf::Vector2f(len, 0.18f));
+                beam.setOrigin(0.f, 0.09f);
+                beam.setPosition(ddx > 0 ? src_x : src_x + ddx * len, src_y);
+            } else {
+                beam.setSize(sf::Vector2f(0.18f, len));
+                beam.setOrigin(0.09f, 0.f);
+                beam.setPosition(src_x, ddy > 0 ? src_y : src_y + ddy * len);
+            }
+            beam.setFillColor(sf::Color(80, 180, 255, a2));
+            beam.setOutlineColor(sf::Color(200, 240, 255, (sf::Uint8)(a2 * 0.6f)));
+            beam.setOutlineThickness(0.05f);
+            win.draw(beam);
+
+            // 탄두 원
+            float hx = src_x + ddx * len;
+            float hy = src_y + ddy * len;
+            float hr = 0.28f * t2;
+            sf::CircleShape head(hr);
+            head.setFillColor(sf::Color(180, 230, 255, a2));
+            head.setOrigin(hr, hr);
+            head.setPosition(hx, hy);
+            win.draw(head);
+        } else {
+            g_proj.active = false;
         }
     }
 
@@ -1115,8 +1229,9 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
 
     // 조작 힌트
     char hint_buf[128];
-    sprintf_s(hint_buf, "ID:%-4d X:%-4d Y:%-4d  [Arrow]Move [A]Atk [S]Skill [Q]Quest [M]Map [T]Chat",
-              g_my_id, g_my_x, g_my_y);
+    const char* dir_str = (g_my_dir==UP?"Up":g_my_dir==DOWN?"Dn":g_my_dir==LEFT?"Lt":"Rt");
+    sprintf_s(hint_buf, "ID:%-4d X:%-4d Y:%-4d Dir:%s  [Arrow]Move [A]Atk [D]Ranged [S]Skill [Q]Quest [M]Map [T]Chat",
+              g_my_id, g_my_x, g_my_y, dir_str);
     sf::Text hint_text(hint_buf, font, 11);
     hint_text.setFillColor(sf::Color(100, 105, 130));
     hint_text.setPosition(10.f, ui_top + 20.f);
@@ -1410,14 +1525,29 @@ int main()
                     // 일반 게임 입력
                     if (event.type == sf::Event::KeyPressed) {
                         switch (event.key.code) {
-                        case sf::Keyboard::Up:    send_move(UP);    g_move_time += 500; break;
-                        case sf::Keyboard::Down:  send_move(DOWN);  g_move_time += 500; break;
-                        case sf::Keyboard::Left:  send_move(LEFT);  g_move_time += 500; break;
-                        case sf::Keyboard::Right: send_move(RIGHT); g_move_time += 500; break;
+                        case sf::Keyboard::Up:
+                            g_my_dir = UP;    send_move(UP);    g_move_time += 500; break;
+                        case sf::Keyboard::Down:
+                            g_my_dir = DOWN;  send_move(DOWN);  g_move_time += 500; break;
+                        case sf::Keyboard::Left:
+                            g_my_dir = LEFT;  send_move(LEFT);  g_move_time += 500; break;
+                        case sf::Keyboard::Right:
+                            g_my_dir = RIGHT; send_move(RIGHT); g_move_time += 500; break;
                         case sf::Keyboard::A:
                             send_attack();
                             g_effect = { EffectType::ATTACK, std::chrono::steady_clock::now() };
                             break;
+                        case sf::Keyboard::D:
+                        {
+                            auto now_r = std::chrono::steady_clock::now();
+                            int elapsed_r = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                                now_r - g_last_ranged_time).count();
+                            if (elapsed_r >= RANGED_CD_MS) {
+                                g_last_ranged_time = now_r;
+                                send_ranged_attack();
+                            }
+                            break;
+                        }
                         case sf::Keyboard::S:
                         {
                             auto now = std::chrono::steady_clock::now();

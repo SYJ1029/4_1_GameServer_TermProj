@@ -97,6 +97,7 @@ void CNPC::do_roaming_move()
     if (std::abs(nx - m_origin_x) <= ROAM_RANGE &&
         std::abs(ny - m_origin_y) <= ROAM_RANGE &&
         !is_obstacle(nx, ny)) {
+        m_dir = (nx != old_x) ? ((nx > old_x) ? RIGHT : LEFT) : ((ny > old_y) ? DOWN : UP);
         m_x = nx;
         m_y = ny;
     } else if (!is_obstacle(m_x, m_y)) {
@@ -106,7 +107,10 @@ void CNPC::do_roaming_move()
         else if (m_x > m_origin_x) --rx;
         else if (m_y < m_origin_y) ++ry;
         else if (m_y > m_origin_y) --ry;
-        if (!is_obstacle(rx, ry)) { m_x = rx; m_y = ry; }
+        if (!is_obstacle(rx, ry)) {
+            m_dir = (rx != m_x) ? ((rx > m_x) ? RIGHT : LEFT) : ((ry > m_y) ? DOWN : UP);
+            m_x = rx; m_y = ry;
+        }
     }
 
     update_viewers(old_x, old_y);
@@ -292,7 +296,10 @@ void CNPC::do_chase_move()
     // A*로 다음 스텝 계산
     short old_x = m_x, old_y = m_y;
     auto [nx, ny] = astar_next_step(m_x, m_y, tx, ty);
-    if (nx != m_x || ny != m_y) { m_x = nx; m_y = ny; }
+    if (nx != m_x || ny != m_y) {
+        m_dir = (nx != m_x) ? ((nx > m_x) ? RIGHT : LEFT) : ((ny > m_y) ? DOWN : UP);
+        m_x = nx; m_y = ny;
+    }
 
     update_viewers(old_x, old_y);
 }

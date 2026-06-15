@@ -141,6 +141,7 @@ void SESSION::send_add_object(int object_id)
         packet.npc_type  = NPC_PC;
         packet.npc_state = NPC_STATE_IDLE;
     }
+    packet.dir = obj->m_dir;
     do_send(packet.size, reinterpret_cast<char*>(&packet));
 }
 
@@ -176,6 +177,7 @@ void SESSION::send_move_object(int object_id)
     packet.x         = obj->m_x;
     packet.y         = obj->m_y;
     packet.move_time = obj->m_move_time;
+    packet.dir       = obj->m_dir;
     do_send(packet.size, reinterpret_cast<char*>(&packet));
 }
 
@@ -472,6 +474,7 @@ bool SESSION::process_packet(unsigned char* p)
         C2S_Move* packet = reinterpret_cast<C2S_Move*>(p);
         m_move_time = packet->move_time;
         DIRECTION dir = packet->dir;
+        m_dir = dir;  // 바라보는 방향 갱신
         do_move(dir);
         if (system_clock::now() < m_spd_boost_until) do_move(dir);  // 이동속도 버프: 2칸
         break;
@@ -505,12 +508,17 @@ bool SESSION::process_packet(unsigned char* p)
             if (!target_obj || target_obj->m_state != CS_PLAYING || target_obj->m_hp <= 0)
                 continue;
 
-            // 4방향 중 하나인지 확인 (정확히 상/하/좌/우 1칸)
+            // 바라보는 방향 정면 3칸 호(arc) 공격
             int dx = target_obj->m_x - m_x;
             int dy = target_obj->m_y - m_y;
-            bool is_cardinal = (dx == 0 && std::abs(dy) == 1)
-                             || (dy == 0 && std::abs(dx) == 1);
-            if (!is_cardinal) continue;
+            bool in_arc = false;
+            switch (m_dir) {
+            case UP:    in_arc = (dy == -1 && std::abs(dx) <= 1); break;
+            case DOWN:  in_arc = (dy ==  1 && std::abs(dx) <= 1); break;
+            case LEFT:  in_arc = (dx == -1 && std::abs(dy) <= 1); break;
+            case RIGHT: in_arc = (dx ==  1 && std::abs(dy) <= 1); break;
+            }
+            if (!in_arc) continue;
 
             CNPC* npc  = to_npc(target_obj);
             short base_atk = calc_atk_dmg(m_level);
@@ -661,6 +669,94 @@ bool SESSION::process_packet(unsigned char* p)
             send_stat_info(m_id, m_hp, m_max_hp, m_level, m_xp, exp_for_next_level());
             send_item_add(pkt->item_type, m_inventory[idx]);
             if (sys[0]) send_chat(-1, "System", sys);
+        }
+        break;
+    }
+    case C2S_RANGED_ATTACK:
+    {
+        if (m_state != CS_PLAYING) break;
+        auto now = system_clock::now();
+        if (duration_cast<milliseconds>(now - m_last_ranged_atk_time).count() < RANGED_ATK_COOL_TIME) break;
+        m_last_ranged_atk_time = now;
+
+        int ddx = (m_dir == LEFT ? -1 : m_dir == RIGHT ? 1 : 0);
+        int ddy = (m_dir == UP   ? -1 : m_dir == DOWN  ? 1 : 0);
+
+        int   hit_id = -1;
+        short travel = 0;
+        for (short i = 1; i <= RANGED_ATK_RANGE; ++i) {
+            short tx = static_cast<short>(m_x + ddx * i);
+            short ty = static_cast<short>(m_y + ddy * i);
+            if (tx < 0 || tx >= WORLD_WIDTH || ty < 0 || ty >= WORLD_HEIGHT) break;
+            if (is_obstacle(tx, ty)) break;
+            travel = i;
+            for (int vid : sector_manager.get_objects_in_adjacent_sectors(tx, ty)) {
+                if (!is_npc(vid)) continue;
+                auto nobj = get_object(vid);
+                if (!nobj || nobj->m_state != CS_PLAYING || nobj->m_hp <= 0) continue;
+                if (nobj->m_x != tx || nobj->m_y != ty) continue;
+                hit_id = vid;
+                break;
+            }
+            if (hit_id != -1) break;
+        }
+
+        // 모든 인접 플레이어에게 투사체 패킷 브로드캐스트
+        for (int id : sector_manager.get_objects_in_adjacent_sectors(m_x, m_y)) {
+            if (!is_pc(id)) continue;
+            auto obj = get_object(id);
+            if (!obj) continue;
+            S2C_Projectile pkt;
+            pkt.size        = sizeof(pkt);
+            pkt.type        = S2C_PROJECTILE;
+            pkt.attacker_id = m_id;
+            pkt.sx          = m_x;
+            pkt.sy          = m_y;
+            pkt.dir         = m_dir;
+            pkt.range       = travel;
+            pkt.hit_id      = hit_id;
+            to_player(obj)->do_send(pkt.size, reinterpret_cast<char*>(&pkt));
+        }
+
+        if (hit_id != -1) {
+            auto nobj = get_object(hit_id);
+            if (nobj && nobj->m_hp > 0) {
+                CNPC* npc      = to_npc(nobj);
+                short base_dmg = calc_skill_dmg(m_level);
+                short dmg      = (now < m_atk_boost_until) ? base_dmg * 2 : base_dmg;
+                npc->m_hp -= dmg;
+                short rem  = npc->m_hp;
+
+                broadcast_damage(m_x, m_y, m_id, hit_id, dmg, rem);
+
+                if (rem <= 0) {
+                    int xp_gain = npc->m_level * npc->m_level * 2;
+                    if      (npc->m_npc_type == NPC_BOSS_TYPE) xp_gain *= 10;
+                    else if (npc->m_npc_type == NPC_AGRO_TYPE) xp_gain *= 2;
+
+                    int npc_type_snapshot = npc->m_npc_type;
+                    npc_die(hit_id, npc);
+
+                    m_xp += xp_gain;
+                    while (m_xp >= exp_for_next_level())
+                        m_xp -= exp_for_next_level(), ++m_level;
+                    m_max_hp = calc_max_hp(m_level);
+                    m_hp     = m_max_hp;
+
+                    process_quest_kill(this, npc_type_snapshot);
+
+                    char sys_msg[MAX_CHAT_LEN];
+                    sprintf_s(sys_msg, "[Ranged] %s 처치! +%d XP (Lv.%d, XP:%d/%d)",
+                              npc->m_username, xp_gain, m_level, m_xp, exp_for_next_level());
+                    send_chat(-1, "System", sys_msg);
+                    send_stat_info(m_id, m_hp, m_max_hp, m_level, m_xp, exp_for_next_level());
+                } else {
+                    npc->m_target_id  = m_id;
+                    npc->m_move_state = NPC_STATE_CHASE;
+                    broadcast_npc_state(hit_id, npc);
+                    npc->wake_up();
+                }
+            }
         }
         break;
     }

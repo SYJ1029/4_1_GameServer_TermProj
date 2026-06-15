@@ -63,8 +63,10 @@ constexpr short NPC_PEACE_MAX_HP  = 30;
 constexpr short NPC_AGRO_MAX_HP   = 80;
 constexpr short PC_ATTACK_DMG     = 15;
 constexpr short PC_SKILL_DMG      = 30;   // 3x3 광역기
-constexpr int   SKILL_COOL_TIME   = 3000; // 3초
-constexpr short NPC_ATTACK_DMG    = 8;
+constexpr int   SKILL_COOL_TIME      = 3000; // 3초
+constexpr int   RANGED_ATK_COOL_TIME = 2000; // 2초 쿨타임
+constexpr int   RANGED_ATK_RANGE     = 6;    // 최대 6칸 직선
+constexpr short NPC_ATTACK_DMG       = 8;
 
 // 레벨 비례 스탯 (DB 로드 시 / 레벨업 시 적용)
 inline short calc_max_hp(int lv)    { return PC_MAX_HP    + (short)((lv - 1) * 10); }

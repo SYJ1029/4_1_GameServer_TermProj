@@ -47,6 +47,7 @@ struct CLIENT {
 	int id;
 	int x;
 	int y;
+	DIRECTION dir;
 	atomic_bool connected;
 
 	SOCKET client_socket;
@@ -55,6 +56,8 @@ struct CLIENT {
 	int prev_packet_data;
 	int curr_packet_size;
 	high_resolution_clock::time_point last_move_time;
+	high_resolution_clock::time_point last_atk_time;
+	high_resolution_clock::time_point last_ranged_time;
 };
 
 array<int, MAX_CLIENTS> client_map;
@@ -136,8 +139,9 @@ void ProcessPacket(int ci, unsigned char packet[])
 		if (move_packet->playerId < MAX_CLIENTS) {
 			int my_id = client_map[move_packet->playerId];
 			if (-1 != my_id) {
-				g_clients[my_id].x = move_packet->x;
-				g_clients[my_id].y = move_packet->y;
+				g_clients[my_id].x   = move_packet->x;
+				g_clients[my_id].y   = move_packet->y;
+				g_clients[my_id].dir = move_packet->dir;
 			}
 			if (ci == my_id) {
 				if (0 != move_packet->move_time) {
@@ -159,9 +163,10 @@ void ProcessPacket(int ci, unsigned char packet[])
 		S2C_AvatarInfo* login_packet = reinterpret_cast<S2C_AvatarInfo*>(packet);
 		int my_id = ci;
 		client_map[login_packet->playerId] = my_id;
-		g_clients[my_id].id = login_packet->playerId;
-		g_clients[my_id].x = login_packet->x;
-		g_clients[my_id].y = login_packet->y;
+		g_clients[my_id].id  = login_packet->playerId;
+		g_clients[my_id].x   = login_packet->x;
+		g_clients[my_id].y   = login_packet->y;
+		g_clients[my_id].dir = login_packet->dir;
 		break;
 	}
 	case S2C_CHAT:        break;
@@ -171,7 +176,8 @@ void ProcessPacket(int ci, unsigned char packet[])
 	case S2C_ITEM_REMOVE: break;
 	case S2C_ITEM_ADD:    break;
 	case S2C_QUEST_UPDATE: break;
-	default: break; // 알 수 없는 패킷 무시
+	case S2C_PROJECTILE:  break;
+	default: break;
 	}
 }
 
@@ -342,30 +348,60 @@ void Test_Thread()
 	while (true) {
 		Adjust_Number_Of_Client();
 
+		auto now = high_resolution_clock::now();
+
 		for (int i = 0; i < num_connections; ++i) {
 			if (false == g_clients[i].connected) continue;
-			if (g_clients[i].last_move_time + 1s > high_resolution_clock::now()) continue;
-			g_clients[i].last_move_time = high_resolution_clock::now();
-			C2S_Move my_packet;
-			my_packet.size = sizeof(my_packet);
-			my_packet.type = C2S_MOVE;
-			switch (rand() % 4) {
-			case 0: my_packet.dir = UP; break;
-			case 1: my_packet.dir = DOWN; break;
-			case 2: my_packet.dir = LEFT; break;
-			case 3: my_packet.dir = RIGHT; break;
+
+			// 이동 (1초마다)
+			if (g_clients[i].last_move_time + 1s <= now) {
+				g_clients[i].last_move_time = now;
+				C2S_Move my_packet;
+				my_packet.size = sizeof(my_packet);
+				my_packet.type = C2S_MOVE;
+				switch (rand() % 4) {
+				case 0: my_packet.dir = UP;    break;
+				case 1: my_packet.dir = DOWN;  break;
+				case 2: my_packet.dir = LEFT;  break;
+				case 3: my_packet.dir = RIGHT; break;
+				}
+				g_clients[i].dir = my_packet.dir;  // 로컬 방향 갱신
+				my_packet.move_time = static_cast<int>(
+					duration_cast<milliseconds>(now.time_since_epoch()).count());
+				SendPacket(i, &my_packet);
 			}
-			my_packet.move_time = static_cast<int>(duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count());
-			SendPacket(i, &my_packet);
+
+			// 방향성 근접 공격 (1.5초마다, 서버 쿨타임 1초)
+			if (g_clients[i].last_atk_time + milliseconds(1500) <= now) {
+				g_clients[i].last_atk_time = now;
+				C2S_Attack atk_pkt;
+				atk_pkt.size = sizeof(atk_pkt);
+				atk_pkt.type = C2S_ATTACK;
+				SendPacket(i, &atk_pkt);
+			}
+
+			// 원거리 공격 (2.5초마다, 서버 쿨타임 2초)
+			if (g_clients[i].last_ranged_time + milliseconds(2500) <= now) {
+				g_clients[i].last_ranged_time = now;
+				C2S_RangedAttack ranged_pkt;
+				ranged_pkt.size = sizeof(ranged_pkt);
+				ranged_pkt.type = C2S_RANGED_ATTACK;
+				SendPacket(i, &ranged_pkt);
+			}
 		}
 	}
 }
 
 void InitializeNetwork()
 {
+	auto epoch = high_resolution_clock::now() - seconds(10);
 	for (auto& cl : g_clients) {
-		cl.connected = false;
-		cl.id = INVALID_ID;
+		cl.connected       = false;
+		cl.id              = INVALID_ID;
+		cl.dir             = DOWN;
+		cl.last_move_time  = epoch;
+		cl.last_atk_time   = epoch;
+		cl.last_ranged_time = epoch;
 	}
 
 	for (auto& cl : client_map) cl = -1;
