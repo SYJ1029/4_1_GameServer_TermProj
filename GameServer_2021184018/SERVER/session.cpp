@@ -2,6 +2,104 @@
 #include "lua_manager.h"
 #include "db.h"
 
+void SESSION::do_send(int num_bytes, const char* data)
+{
+    if (!can_send() || num_bytes <= 0 || num_bytes > BUF_SIZE) return;
+
+    bool start_send = false;
+    {
+        std::lock_guard<std::mutex> lock(m_send_mutex);
+        if (!can_send()) return;
+
+        PendingSend pending;
+        pending.size = num_bytes;
+        memcpy(pending.data.data(), data, num_bytes);
+        m_send_queue.push_back(std::move(pending));
+
+        if (!m_send_pending) {
+            m_send_pending = true;
+            start_send = true;
+        }
+    }
+
+    if (start_send)
+        start_next_send();
+}
+
+void SESSION::start_next_send()
+{
+    EXP_OVER* over = new EXP_OVER(IO_SEND);
+    over->m_send_storage.reserve(SEND_BATCH_SIZE);
+
+    {
+        std::lock_guard<std::mutex> lock(m_send_mutex);
+        if (!can_send() || m_send_queue.empty()) {
+            m_send_pending = false;
+            delete over;
+            return;
+        }
+
+        size_t batch_size = 0;
+        while (!m_send_queue.empty()) {
+            const PendingSend& pending = m_send_queue.front();
+            if (batch_size != 0 &&
+                batch_size + static_cast<size_t>(pending.size) > SEND_BATCH_SIZE)
+                break;
+
+            size_t old_size = over->m_send_storage.size();
+            over->m_send_storage.resize(old_size + pending.size);
+            memcpy(over->m_send_storage.data() + old_size,
+                   pending.data.data(), pending.size);
+            batch_size += pending.size;
+            m_send_queue.pop_front();
+        }
+    }
+
+    over->m_wsa.buf = over->m_send_storage.data();
+    over->m_wsa.len = static_cast<ULONG>(over->m_send_storage.size());
+
+    if (!post_send(over))
+        fail_send(over);
+}
+
+bool SESSION::post_send(EXP_OVER* over)
+{
+    ZeroMemory(&over->m_over, sizeof(over->m_over));
+    int ret = WSASend(m_client, &over->m_wsa, 1, nullptr, 0,
+                      &over->m_over, nullptr);
+    return ret == 0 || WSAGetLastError() == WSA_IO_PENDING;
+}
+
+void SESSION::fail_send(EXP_OVER* over)
+{
+    delete over;
+    {
+        std::lock_guard<std::mutex> lock(m_send_mutex);
+        m_send_queue.clear();
+        m_send_pending = false;
+    }
+    disconnect(m_id);
+}
+
+void SESSION::on_send_complete(EXP_OVER* over, DWORD num_bytes)
+{
+    if (num_bytes == 0 || num_bytes > over->m_wsa.len) {
+        fail_send(over);
+        return;
+    }
+
+    if (num_bytes < over->m_wsa.len) {
+        over->m_wsa.buf += num_bytes;
+        over->m_wsa.len -= num_bytes;
+        if (!post_send(over))
+            fail_send(over);
+        return;
+    }
+
+    delete over;
+    start_next_send();
+}
+
 // ── 월드 아이템 ───────────────────────────────────────────────────
 struct WorldItem {
     int       id;

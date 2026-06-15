@@ -24,6 +24,7 @@ using namespace std;
 using namespace std::chrono;
 
 constexpr int BUF_SIZE = 200;
+constexpr int SEND_BATCH_SIZE = 16 * 1024;
 constexpr int VIEW_RANGE = 5;
 constexpr int MOVE_COOL_TIME    = 500;    // 0.5초/칸 (PDF 스펙)
 constexpr int ATTACK_COOL_TIME  = 1000;   // 1초/회
@@ -119,6 +120,7 @@ public:
 	WSABUF m_wsa;
 	SOCKET m_client_socket;
 	char      m_buff[BUF_SIZE];
+	std::vector<char> m_send_storage;
 	DB_RESULT m_db_result;
 
 	EXP_OVER() : m_iotype(IO_RECV), m_client_socket(INVALID_SOCKET)

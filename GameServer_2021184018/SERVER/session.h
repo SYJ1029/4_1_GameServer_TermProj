@@ -1,5 +1,6 @@
 #pragma once
 #include "Object.h"
+#include <deque>
 
 // DB 연동 시 player_quests 테이블 행 하나와 1:1 대응
 struct QuestProgress {
@@ -8,6 +9,11 @@ struct QuestProgress {
 };
 
 class SESSION : public CObject {
+    struct PendingSend {
+        int size;
+        std::array<char, BUF_SIZE> data;
+    };
+
 public:
     SOCKET    m_client;
     EXP_OVER  m_recv_over;
@@ -21,6 +27,9 @@ public:
     system_clock::time_point m_spd_boost_until;   // 이동속도 강화 만료 시각
     std::unordered_set<int> m_visible_objects;
     std::mutex              m_visible_mutex;
+    std::deque<PendingSend> m_send_queue;
+    std::mutex              m_send_mutex;
+    bool                    m_send_pending = false;
 
     int exp_for_next_level() const { return 100 * (1 << (m_level - 1)); }
 
@@ -66,14 +75,8 @@ public:
         WSARecv(m_client, &m_recv_over.m_wsa, 1, 0, &recv_flag, &m_recv_over.m_over, nullptr);
     }
 
-    void do_send(int num_bytes, char* data)
-    {
-        if (!can_send()) return;
-        EXP_OVER* over = new EXP_OVER(IO_SEND);
-        over->m_wsa.len = num_bytes;
-        memcpy(over->m_buff, data, num_bytes);
-        WSASend(m_client, &over->m_wsa, 1, 0, 0, &over->m_over, nullptr);
-    }
+    void do_send(int num_bytes, const char* data);
+    void on_send_complete(EXP_OVER* over, DWORD num_bytes);
 
     void send_login_success()
     {
@@ -117,4 +120,9 @@ public:
 
     bool process_packet(unsigned char* p);
     void do_move(DIRECTION dir);
+
+private:
+    void start_next_send();
+    bool post_send(EXP_OVER* over);
+    void fail_send(EXP_OVER* over);
 };

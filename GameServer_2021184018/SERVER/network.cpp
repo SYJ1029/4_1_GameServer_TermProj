@@ -155,6 +155,8 @@ void worker_thread()
 
 		if (TRUE != ret) {
 			error_display(L"GQCS Error: ", WSAGetLastError());
+			if (exp_over && exp_over->m_iotype == IO_SEND)
+				delete exp_over;
 			if (key >= 0) disconnect(key);
 			continue;
 		}
@@ -215,8 +217,15 @@ void worker_thread()
 			break;
 		}
 		case IO_SEND:
-			delete exp_over;
+		{
+			std::shared_ptr<CObject> obj = get_object(key);
+			if (nullptr == obj || !is_pc(key)) {
+				delete exp_over;
+				break;
+			}
+			to_player(obj)->on_send_complete(exp_over, num_bytes);
 			break;
+		}
 		case IO_NPC_MOVE:
 			delete exp_over;
 			process_npc_move(key);
