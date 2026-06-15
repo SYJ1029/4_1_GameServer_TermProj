@@ -1109,10 +1109,13 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
             win.draw(pname);
 
             // 설명
-            sf::Text pdesc(q.desc, font, 10);
-            pdesc.setFillColor(sf::Color(160, 165, 180));
-            pdesc.setPosition(PX + 10.f, py + 14.f);
-            win.draw(pdesc);
+            {
+                auto desc_u8 = sf::String::fromUtf8(q.desc, q.desc + strlen(q.desc));
+                sf::Text pdesc(desc_u8, font, 10);
+                pdesc.setFillColor(sf::Color(160, 165, 180));
+                pdesc.setPosition(PX + 10.f, py + 14.f);
+                win.draw(pdesc);
+            }
 
             // 진행 바
             constexpr float PBW = PW - 20.f;
@@ -1128,13 +1131,17 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
                 win.draw(pbar);
             }
 
-            // 카운트 + 보상
-            char pcnt[32];
-            sprintf_s(pcnt, "%d / %d     %s", q.current, q.target, q.reward_str);
-            sf::Text pcnt_txt(pcnt, font, 10);
-            pcnt_txt.setFillColor(sf::Color(180, 185, 200));
-            pcnt_txt.setPosition(PX + 10.f, py + 41.f);
-            win.draw(pcnt_txt);
+            // 카운트 + 보상 (pcnt[128]: 한국어 reward_str이 UTF-8로 최대 ~40바이트)
+            char pcnt[128];
+            sprintf_s(pcnt, "%d / %d  ", q.current, q.target);
+            {
+                auto cnt_str  = sf::String::fromUtf8(pcnt, pcnt + strlen(pcnt));
+                auto rew_str  = sf::String::fromUtf8(q.reward_str, q.reward_str + strlen(q.reward_str));
+                sf::Text pcnt_txt(cnt_str + rew_str, font, 10);
+                pcnt_txt.setFillColor(sf::Color(180, 185, 200));
+                pcnt_txt.setPosition(PX + 10.f, py + 41.f);
+                win.draw(pcnt_txt);
+            }
 
             // 퀘스트 간 구분선
             if (qi < QUEST_COUNT - 1) {
