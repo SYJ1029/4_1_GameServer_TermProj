@@ -29,8 +29,12 @@ static void load_obstacles(lua_State* L)
         };
         int ox = get_int("x"), oy = get_int("y");
         int ow = get_int("w"), oh = get_int("h");
+        int ot = 0;
+        lua_getfield(L, -1, "t");
+        if (lua_isnumber(L, -1)) ot = (int)lua_tointeger(L, -1);
+        lua_pop(L, 1);
 
-        g_obstacle_rects.push_back({ ox, oy, ow, oh });
+        g_obstacle_rects.push_back({ ox, oy, ow, oh, ot });
 
         for (int dy = 0; dy < oh; ++dy)
             for (int dx = 0; dx < ow; ++dx) {
@@ -117,18 +121,19 @@ bool write_obstacle_bin(const char* path)
         return false;
     }
 
-    const char magic[4] = { 'O','B','S','1' };
+    const char magic[4] = { 'O','B','S','2' };
     fwrite(magic, 1, 4, f);
 
     int32_t n = (int32_t)g_obstacle_rects.size();
     fwrite(&n, 4, 1, f);
 
     for (auto& r : g_obstacle_rects) {
-        int16_t vals[4] = {
+        int16_t vals[5] = {
             (int16_t)r.x, (int16_t)r.y,
-            (int16_t)r.w, (int16_t)r.h
+            (int16_t)r.w, (int16_t)r.h,
+            (int16_t)r.obs_type
         };
-        fwrite(vals, 2, 4, f);
+        fwrite(vals, 2, 5, f);
     }
 
     fclose(f);

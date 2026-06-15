@@ -5,7 +5,18 @@
 obstacles = {}
 
 local function rect(x, y, w, h)
-    table.insert(obstacles, {x=x, y=y, w=w, h=h})
+    table.insert(obstacles, {x=x, y=y, w=w, h=h, t=0})
+end
+
+-- 타입 지정 장애물 (t=1: 나무, t=2: 물)
+local function tree(x, y)
+    if x > 4 and x < 1995 and y > 4 and y < 1995 then
+        table.insert(obstacles, {x=x, y=y, w=1, h=1, t=1})
+    end
+end
+
+local function water(x, y, w, h)
+    table.insert(obstacles, {x=x, y=y, w=w, h=h, t=2})
 end
 
 -- castle(cx, cy, size, t, gate)
@@ -149,6 +160,43 @@ for _ = 1, 600 do
         rect(rx, ry, rw, rh)
     end
 end
+
+-- ── 나무 숲 (type=1) ─────────────────────────────────────────────
+-- 4개 모서리 숲 + 동/서 측면 숲
+local tree_clusters = {
+    {cx=110,  cy=220,  r=70, n=55},   -- 북서 코너 숲
+    {cx=1890, cy=220,  r=70, n=55},   -- 북동 코너 숲
+    {cx=110,  cy=1780, r=70, n=55},   -- 남서 코너 숲
+    {cx=1890, cy=1780, r=70, n=55},   -- 남동 코너 숲
+    {cx=80,   cy=820,  r=55, n=40},   -- 서쪽 측면 숲 (북)
+    {cx=80,   cy=1160, r=55, n=40},   -- 서쪽 측면 숲 (남)
+    {cx=1920, cy=820,  r=55, n=40},   -- 동쪽 측면 숲 (북)
+    {cx=1920, cy=1160, r=55, n=40},   -- 동쪽 측면 숲 (남)
+}
+
+math.randomseed(31415 + 9265)
+for _, cl in ipairs(tree_clusters) do
+    local placed_t = 0
+    local tries_t  = 0
+    while placed_t < cl.n and tries_t < cl.n * 12 do
+        tries_t = tries_t + 1
+        local tx = cl.cx + math.random(-cl.r, cl.r)
+        local ty = cl.cy + math.random(-cl.r, cl.r)
+        if not is_excluded(tx, ty) then
+            tree(tx, ty)
+            placed_t = placed_t + 1
+        end
+    end
+end
+
+-- ── 호수 / 연못 (type=2) ─────────────────────────────────────────
+-- 명명 존 제외 구역 바깥 빈 공간에 배치
+water(188,  558, 12,  8)   -- 북서 호수 (Orc NW 서쪽)
+water(1792, 558, 12,  8)   -- 북동 호수 (Orc NE 동쪽)
+water(188,  1390, 12, 8)   -- 남서 호수 (Goblin SW 서쪽)
+water(1792, 1390, 12, 8)   -- 남동 호수 (Goblin SE 동쪽)
+water(942,  308, 18,  6)   -- 북부 연못 (스폰 아래)
+water(942,  1660, 18, 6)   -- 남부 연못
 
 -- ── NPC spawn zones ───────────────────────────────────────────────
 npc_groups = {

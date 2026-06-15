@@ -14,8 +14,10 @@ struct NpcSpawnGroup {
 };
 
 // 장애물 직사각형
+// obs_type: 0=벽/바위, 1=나무, 2=물
 struct ObstacleRect {
     int x, y, w, h;
+    int obs_type = 0;
 };
 
 extern lua_State*                  g_lua;

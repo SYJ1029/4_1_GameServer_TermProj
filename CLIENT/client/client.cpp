@@ -119,7 +119,8 @@ struct GameTextures {
 constexpr float SPR_S = 1.0f / 16.0f;   // 16px 스프라이트 → 1 월드 단위
 
 // ── 장애물 ────────────────────────────────────────────────────────
-struct ObstacleRect { short x, y, w, h; };
+// obs_type: 0=벽/바위, 1=나무, 2=물
+struct ObstacleRect { short x, y, w, h; short obs_type; };
 static std::vector<ObstacleRect> g_obstacles;
 
 static void load_obstacles_bin(const char* path)
@@ -129,15 +130,23 @@ static void load_obstacles_bin(const char* path)
 
     char magic[4];
     fread(magic, 1, 4, f);
-    if (magic[0]!='O'||magic[1]!='B'||magic[2]!='S'||magic[3]!='1') { fclose(f); return; }
+    bool is_v2 = (magic[0]=='O'&&magic[1]=='B'&&magic[2]=='S'&&magic[3]=='2');
+    bool is_v1 = (magic[0]=='O'&&magic[1]=='B'&&magic[2]=='S'&&magic[3]=='1');
+    if (!is_v2 && !is_v1) { fclose(f); return; }
 
     int32_t n = 0;
     fread(&n, 4, 1, f);
     g_obstacles.resize(n);
     for (int i = 0; i < n; ++i) {
-        int16_t vals[4];
-        fread(vals, 2, 4, f);
-        g_obstacles[i] = { vals[0], vals[1], vals[2], vals[3] };
+        if (is_v2) {
+            int16_t vals[5];
+            fread(vals, 2, 5, f);
+            g_obstacles[i] = { vals[0], vals[1], vals[2], vals[3], vals[4] };
+        } else {
+            int16_t vals[4];
+            fread(vals, 2, 4, f);
+            g_obstacles[i] = { vals[0], vals[1], vals[2], vals[3], 0 };
+        }
     }
     fclose(f);
 }
@@ -600,22 +609,59 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         for (auto& r : g_obstacles) {
             if (r.x + r.w < vx0 || r.x > vx1) continue;
             if (r.y + r.h < vy0 || r.y > vy1) continue;
-            wall.setSize(sf::Vector2f((float)r.w, (float)r.h));
-            bool is_pillar = (r.w == 1 && r.h == 1);
-            bool is_rock   = (!is_pillar && std::max(r.w, r.h) <= 2);
-            if (g_tex.ok) {
-                sf::Texture& tex = is_pillar ? g_tex.pillar
-                                 : (is_rock   ? g_tex.wall : g_tex.castle_wall);
-                wall.setTexture(&tex);
-                wall.setTextureRect(sf::IntRect(0, 0, r.w * 16, r.h * 16));
+
+            if (r.obs_type == 1) {
+                // ── 나무: 육각형 수관(crown) + 갈색 기둥
+                sf::CircleShape crown(0.43f, 6);
+                crown.setFillColor(sf::Color(34, 110, 30));
+                crown.setOutlineColor(sf::Color(18, 65, 18));
+                crown.setOutlineThickness(0.05f);
+                crown.setOrigin(0.43f, 0.43f);
+                crown.setPosition((float)r.x + 0.5f, (float)r.y + 0.36f);
+                win.draw(crown);
+                sf::RectangleShape trunk(sf::Vector2f(0.14f, 0.22f));
+                trunk.setFillColor(sf::Color(110, 68, 22));
+                trunk.setOrigin(0.07f, 0.0f);
+                trunk.setPosition((float)r.x + 0.5f, (float)r.y + 0.72f);
+                win.draw(trunk);
+            } else if (r.obs_type == 2) {
+                // ── 물: 파란 사각형 + 물결 하이라이트
+                sf::RectangleShape water_bg;
+                water_bg.setSize(sf::Vector2f((float)r.w, (float)r.h));
+                water_bg.setFillColor(sf::Color(30, 90, 200, 210));
+                water_bg.setOutlineColor(sf::Color(20, 55, 155));
+                water_bg.setOutlineThickness(0.06f);
+                water_bg.setPosition((float)r.x, (float)r.y);
+                win.draw(water_bg);
+                // 물결 줄무늬
+                for (int row = 0; row < r.h; ++row) {
+                    sf::RectangleShape wave(sf::Vector2f((float)r.w * 0.55f, 0.07f));
+                    wave.setFillColor(sf::Color(100, 170, 255, 90));
+                    wave.setPosition((float)r.x + r.w * 0.22f,
+                                     (float)r.y + row + 0.32f);
+                    win.draw(wave);
+                }
             } else {
-                wall.setFillColor(is_rock ? sf::Color(80, 65, 50)
-                                          : sf::Color(90, 85, 110));
-                wall.setOutlineColor(sf::Color(50, 40, 30));
-                wall.setOutlineThickness(0.04f);
+                // ── 기존 벽/바위
+                wall.setSize(sf::Vector2f((float)r.w, (float)r.h));
+                bool is_pillar = (r.w == 1 && r.h == 1);
+                bool is_rock   = (!is_pillar && std::max(r.w, r.h) <= 2);
+                if (g_tex.ok) {
+                    sf::Texture& tex = is_pillar ? g_tex.pillar
+                                     : (is_rock   ? g_tex.wall : g_tex.castle_wall);
+                    wall.setTexture(&tex);
+                    wall.setTextureRect(sf::IntRect(0, 0, r.w * 16, r.h * 16));
+                    wall.setFillColor(sf::Color::White);
+                } else {
+                    wall.setTexture(nullptr);
+                    wall.setFillColor(is_rock ? sf::Color(80, 65, 50)
+                                              : sf::Color(90, 85, 110));
+                    wall.setOutlineColor(sf::Color(50, 40, 30));
+                    wall.setOutlineThickness(0.04f);
+                }
+                wall.setPosition((float)r.x, (float)r.y);
+                win.draw(wall);
             }
-            wall.setPosition((float)r.x, (float)r.y);
-            win.draw(wall);
         }
     }
 
@@ -1332,13 +1378,10 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         mm_border.setPosition(MM_X - 1.f, MM_Y - 1.f);
         win.draw(mm_border);
 
-        // 장애물 색상 분류 (크기 기반 휴리스틱)
-        // w==1 && h==1   : 성채 내부 기둥  → 금색
-        // max(w,h) <=2   : 소형 돌부리     → 갈색
-        // max(w,h) <= 40 : 격자 소형 성채  → 파란 회색
-        // max(w,h) <= 200: Named Zone 성벽 → 밝은 청록
-        // max(w,h) > 200 : 맵 테두리       → 빨간색
+        // 미니맵 장애물 색상 (타입 우선, 그 다음 크기 기반)
         auto obs_color = [](const ObstacleRect& r) -> sf::Color {
+            if (r.obs_type == 1) return sf::Color( 34, 130,  34, 220);  // 나무: 초록
+            if (r.obs_type == 2) return sf::Color( 40, 100, 210, 220);  // 물:   파랑
             if (r.w == 1 && r.h == 1) return sf::Color(255, 200,  60, 240);
             int md = std::max(r.w, r.h);
             if (md <= 2)   return sf::Color(190, 140,  80, 230);

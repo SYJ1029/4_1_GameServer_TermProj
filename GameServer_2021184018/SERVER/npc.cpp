@@ -361,7 +361,9 @@ void process_npc_move(int npc_id)
             }
         }
     } else {
-        int deact_range = VIEW_RANGE;
+        // Agro가 CHASE 상태이면 감지 범위로, 그 외엔 뷰 범위로 비활성화 결정
+        int deact_range = (npc->m_npc_type == NPC_AGRO_TYPE && npc->m_move_state == NPC_STATE_CHASE)
+                          ? AGRO_DETECT_RANGE : VIEW_RANGE;
         for (int id : sector_manager.get_objects_in_adjacent_sectors(npc->m_x, npc->m_y)) {
             if (!is_pc(id)) continue;
             auto pobj = get_object(id);
@@ -421,7 +423,17 @@ void process_npc_respawn(int npc_id)
         // m_origin_x/y 유지 — 로밍 범위의 기준점을 초기 스폰 위치로 고정
     }
     sector_manager.add_object_to_sector(npc_id, npc->m_x, npc->m_y);
-    // wake_up은 플레이어가 근처에 왔을 때 자동으로 호출됨
+
+    // 이미 주변에 있는 플레이어에게 즉시 알림 (움직이지 않아도 NPC가 보임)
+    for (int pid : sector_manager.get_objects_in_adjacent_sectors(npc->m_x, npc->m_y)) {
+        if (!is_pc(pid)) continue;
+        auto pobj = get_object(pid);
+        if (!pobj) continue;
+        SESSION* pl = to_player(pobj);
+        if (!pl->can_send() || !pl->can_see(npc->m_x, npc->m_y)) continue;
+        pl->send_add_object(npc_id);
+        npc->wake_up();
+    }
 }
 
 void InitializeNPC()
