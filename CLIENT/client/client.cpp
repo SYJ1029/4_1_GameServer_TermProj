@@ -87,6 +87,17 @@ struct VisualEffect {
 };
 static VisualEffect g_effect;
 
+// ── 스프라이트 텍스처 (CC0 · Kenney Tiny Dungeon) ─────────────────
+struct GameTextures {
+    sf::Texture floor, wall;
+    sf::Texture player_me, player_other;
+    sf::Texture npc_peace, npc_agro;
+    sf::Texture npc_boss, npc_boss_p3;
+    sf::Texture item_potion;
+    bool ok = false;
+} static g_tex;
+constexpr float SPR_S = 1.0f / 16.0f;   // 16px 스프라이트 → 1 월드 단위
+
 // ── 장애물 ────────────────────────────────────────────────────────
 struct ObstacleRect { short x, y, w, h; };
 static std::vector<ObstacleRect> g_obstacles;
@@ -518,33 +529,44 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
     game_view.setViewport(sf::FloatRect(0.f, 0.f, 1.f, GAME_VP_H));
     win.setView(game_view);
 
-    // 배경 타일
-    sf::RectangleShape tile(sf::Vector2f(1.f, 1.f));
-    tile.setOutlineThickness(0.025f);
-    tile.setOutlineColor(sf::Color(48, 48, 58));
-    for (int dy = -1; dy <= VSIZE; ++dy) {
-        for (int dx = -1; dx <= VSIZE; ++dx) {
-            int wx = g_my_x - VSIZE / 2 + dx;
-            int wy = g_my_y - VSIZE / 2 + dy;
-            bool oob = wx < 0 || wx >= WORLD_WIDTH || wy < 0 || wy >= WORLD_HEIGHT;
-            tile.setFillColor(oob ? sf::Color(8, 8, 12) : sf::Color(28, 28, 36));
-            tile.setPosition((float)wx, (float)wy);
-            win.draw(tile);
+    // 배경 바닥 — 인-바운드 영역 한 장의 반복 텍스처로 렌더링
+    {
+        int fx0 = std::max(0,            g_my_x - VSIZE / 2 - 1);
+        int fy0 = std::max(0,            g_my_y - VSIZE / 2 - 1);
+        int fx1 = std::min(WORLD_WIDTH,  g_my_x + VSIZE / 2 + VSIZE);
+        int fy1 = std::min(WORLD_HEIGHT, g_my_y + VSIZE / 2 + VSIZE);
+        int fw = fx1 - fx0, fh = fy1 - fy0;
+        if (fw > 0 && fh > 0) {
+            sf::RectangleShape fr(sf::Vector2f((float)fw, (float)fh));
+            if (g_tex.ok) {
+                fr.setTexture(&g_tex.floor);
+                fr.setTextureRect(sf::IntRect(0, 0, fw * 16, fh * 16));
+            } else {
+                fr.setFillColor(sf::Color(28, 28, 36));
+            }
+            fr.setPosition((float)fx0, (float)fy0);
+            win.draw(fr);
         }
     }
 
-    // 장애물 렌더링
+    // 장애물 렌더링 — 벽 텍스처 반복
     {
         float vx0 = g_my_x - VSIZE / 2.f, vy0 = g_my_y - VSIZE / 2.f;
         float vx1 = vx0 + VSIZE,           vy1 = vy0 + VSIZE;
         sf::RectangleShape wall;
-        wall.setFillColor(sf::Color(90, 75, 60));
-        wall.setOutlineColor(sf::Color(60, 50, 40));
-        wall.setOutlineThickness(0.04f);
+        if (!g_tex.ok) {
+            wall.setFillColor(sf::Color(90, 75, 60));
+            wall.setOutlineColor(sf::Color(60, 50, 40));
+            wall.setOutlineThickness(0.04f);
+        }
         for (auto& r : g_obstacles) {
             if (r.x + r.w < vx0 || r.x > vx1) continue;
             if (r.y + r.h < vy0 || r.y > vy1) continue;
             wall.setSize(sf::Vector2f((float)r.w, (float)r.h));
+            if (g_tex.ok) {
+                wall.setTexture(&g_tex.wall);
+                wall.setTextureRect(sf::IntRect(0, 0, r.w * 16, r.h * 16));
+            }
             wall.setPosition((float)r.x, (float)r.y);
             win.draw(wall);
         }
@@ -558,27 +580,41 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
             item_snaps.reserve(g_world_items_cl.size());
             for (auto& [id, item] : g_world_items_cl) item_snaps.push_back(item);
         }
-        static const sf::Color item_fill_colors[ITEM_SLOT_COUNT+1] = {
-            sf::Color(255,220,30),   // 0=none(unused)
-            sf::Color(220, 60, 60),  // 1=HP 포션 - 빨강
-            sf::Color(220,130, 30),  // 2=대형 HP 포션 - 주황
-            sf::Color(220,200,  0),  // 3=엘릭서 - 금
-            sf::Color( 60,220,220),  // 4=공격력 강화 - 시안 (월드드롭 안 되지만 예비)
-            sf::Color(160, 60,220),  // 5=방어력 강화 - 보라
-            sf::Color( 60,160,255),  // 6=이동속도 - 파랑
+        static const sf::Color item_tints[ITEM_SLOT_COUNT+1] = {
+            sf::Color(255,220, 30),  // 0=none
+            sf::Color(255, 80, 80),  // 1=HP 포션
+            sf::Color(255,150, 40),  // 2=대형 HP 포션
+            sf::Color(255,220,  0),  // 3=엘릭서
+            sf::Color( 80,200,255),  // 4=공격력 강화
+            sf::Color(120,255,120),  // 5=방어력 강화
+            sf::Color(100,180,255),  // 6=이동속도
         };
-        sf::CircleShape item_circle(0.24f);
-        item_circle.setOutlineThickness(0.06f);
         float vx0 = g_my_x - VSIZE / 2.f, vy0 = g_my_y - VSIZE / 2.f;
         float vx1 = vx0 + VSIZE,           vy1 = vy0 + VSIZE;
         for (auto& item : item_snaps) {
             if (item.x < vx0 || item.x > vx1 || item.y < vy0 || item.y > vy1) continue;
             int ci = (int)item.item_type;
-            sf::Color fc = (ci >= 1 && ci <= ITEM_SLOT_COUNT) ? item_fill_colors[ci] : item_fill_colors[0];
-            item_circle.setFillColor(fc);
-            item_circle.setOutlineColor(sf::Color(fc.r/2, fc.g/2, fc.b/2));
-            item_circle.setPosition(item.x + 0.26f, item.y + 0.26f);
-            win.draw(item_circle);
+            sf::Color tint = (ci >= 1 && ci <= ITEM_SLOT_COUNT) ? item_tints[ci] : item_tints[0];
+            if (g_tex.ok) {
+                // 발광 후광 (아이템 강조)
+                sf::CircleShape glow(0.45f);
+                glow.setFillColor(sf::Color(tint.r/3, tint.g/3, tint.b/3, 140));
+                glow.setPosition(item.x + 0.05f, item.y + 0.05f);
+                win.draw(glow);
+                // 포션 스프라이트
+                sf::Sprite spr(g_tex.item_potion);
+                spr.setScale(SPR_S, SPR_S);
+                spr.setColor(tint);
+                spr.setPosition((float)item.x, (float)item.y);
+                win.draw(spr);
+            } else {
+                sf::CircleShape item_circle(0.24f);
+                item_circle.setOutlineThickness(0.06f);
+                item_circle.setFillColor(tint);
+                item_circle.setOutlineColor(sf::Color(tint.r/2, tint.g/2, tint.b/2));
+                item_circle.setPosition(item.x + 0.26f, item.y + 0.26f);
+                win.draw(item_circle);
+            }
         }
     }
 
@@ -591,80 +627,152 @@ static void draw_game(sf::RenderWindow& win, sf::Font& font)
         for (auto& [id, o] : g_objs) snaps.push_back({ o });
     }
 
-    // 오브젝트 렌더링: 보스=원, 나머지=사각형
-    sf::RectangleShape obj_rect(sf::Vector2f(0.84f, 0.84f));
-    sf::CircleShape boss_circle(0.46f);
-    boss_circle.setOutlineThickness(0.07f);
-    boss_circle.setOutlineColor(sf::Color(255, 230, 80));
+    // 스프라이트 드로우 헬퍼
+    auto draw_spr = [&](sf::Texture& tex, float wx, float wy,
+                        sf::Color tint = sf::Color::White) {
+        sf::Sprite spr(tex);
+        spr.setScale(SPR_S, SPR_S);
+        spr.setColor(tint);
+        spr.setPosition(wx, wy);
+        win.draw(spr);
+    };
+    // 폴백용 사각형 드로우 헬퍼
+    auto draw_rect = [&](float wx, float wy, sf::Color c) {
+        sf::RectangleShape r(sf::Vector2f(0.84f, 0.84f));
+        r.setFillColor(c);
+        r.setPosition(wx + 0.08f, wy + 0.08f);
+        win.draw(r);
+    };
 
     for (auto& s : snaps) {
+        float wx = (float)s.info.x, wy = (float)s.info.y;
+        float ratio = (s.info.max_hp > 0)
+                    ? std::max(0.f, (float)s.info.hp / s.info.max_hp) : 0.f;
+
         if (s.info.npc_type == NPC_BOSS) {
-            // 페이즈별 색상: 금색(P1) → 주황(P2) → 진홍(P3)
-            float ratio = (s.info.max_hp > 0)
-                        ? std::max(0.f, (float)s.info.hp / s.info.max_hp) : 0.f;
-            sf::Color bc = (ratio > 0.66f) ? sf::Color(210, 160, 0)
-                         : (ratio > 0.33f) ? sf::Color(200, 80,  0)
-                                           : sf::Color(180, 0,   0);
-            boss_circle.setFillColor(bc);
-            boss_circle.setPosition(s.info.x + 0.08f, s.info.y + 0.08f);
-            win.draw(boss_circle);
-            draw_hp_bar(win, (float)s.info.x, (float)s.info.y, s.info.hp, s.info.max_hp);
+            // 페이즈별 틴트 + 스프라이트
+            sf::Color tint = (ratio > 0.66f) ? sf::Color(255, 255, 180)   // P1: 금빛
+                           : (ratio > 0.33f) ? sf::Color(255, 160,  60)   // P2: 주황
+                                             : sf::Color(255,  80,  80);   // P3: 붉은 분노
+            sf::Texture& boss_tex = (ratio <= 0.33f) ? g_tex.npc_boss_p3 : g_tex.npc_boss;
+
+            // 보스 후광 원 (페이즈 강조)
+            float glow_r = 0.6f;
+            sf::CircleShape glow(glow_r);
+            glow.setFillColor(sf::Color(tint.r/4, tint.g/4, tint.b/4, 160));
+            glow.setOutlineColor(sf::Color(tint.r, tint.g, tint.b, 180));
+            glow.setOutlineThickness(0.06f);
+            glow.setPosition(wx + 0.5f - glow_r, wy + 0.5f - glow_r);
+            win.draw(glow);
+
+            if (g_tex.ok) draw_spr(boss_tex, wx, wy, tint);
+            else {
+                sf::CircleShape bc(0.46f);
+                bc.setFillColor(tint);
+                bc.setOutlineColor(sf::Color(255, 230, 80));
+                bc.setOutlineThickness(0.07f);
+                bc.setPosition(wx + 0.08f, wy + 0.08f);
+                win.draw(bc);
+            }
+            draw_hp_bar(win, wx, wy, s.info.hp, s.info.max_hp);
             continue;
         }
 
-        sf::Color c;
         if (s.info.npc_type == NPC_PC) {
-            c = sf::Color(55, 185, 80);
-        } else if (s.info.npc_state == NPC_STATE_CHASE) {
-            c = sf::Color(255, 40, 40);   // 추격 중 — 밝은 빨강
+            if (g_tex.ok) draw_spr(g_tex.player_other, wx, wy);
+            else          draw_rect(wx, wy, sf::Color(55, 185, 80));
         } else if (s.info.npc_type == NPC_AGRO) {
-            c = sf::Color(200, 100, 30);  // Agro 로밍 — 주황
-        } else {
-            c = sf::Color(120, 140, 90);  // Peace 대기 — 올리브
+            sf::Color tint = (s.info.npc_state == NPC_STATE_CHASE)
+                           ? sf::Color(255, 120, 120)   // 추격: 붉은 틴트
+                           : sf::Color::White;
+            if (g_tex.ok) draw_spr(g_tex.npc_agro, wx, wy, tint);
+            else          draw_rect(wx, wy, (s.info.npc_state == NPC_STATE_CHASE)
+                                            ? sf::Color(255, 40, 40) : sf::Color(200, 100, 30));
+            draw_hp_bar(win, wx, wy, s.info.hp, s.info.max_hp);
+        } else { // PEACE
+            if (g_tex.ok) draw_spr(g_tex.npc_peace, wx, wy);
+            else          draw_rect(wx, wy, sf::Color(120, 140, 90));
+            draw_hp_bar(win, wx, wy, s.info.hp, s.info.max_hp);
         }
-        obj_rect.setFillColor(c);
-        obj_rect.setPosition(s.info.x + 0.08f, s.info.y + 0.08f);
-        win.draw(obj_rect);
-
-        if (s.info.npc_type != NPC_PC)
-            draw_hp_bar(win, (float)s.info.x, (float)s.info.y, s.info.hp, s.info.max_hp);
     }
 
-    // 내 캐릭터 + HP 바
-    obj_rect.setFillColor(sf::Color(70, 115, 255));
-    obj_rect.setPosition(g_my_x + 0.08f, g_my_y + 0.08f);
-    win.draw(obj_rect);
+    // 내 캐릭터: 파란 기사 (선택 링 추가)
+    {
+        sf::CircleShape sel(0.52f);
+        sel.setFillColor(sf::Color::Transparent);
+        sel.setOutlineColor(sf::Color(100, 160, 255, 200));
+        sel.setOutlineThickness(0.06f);
+        sel.setPosition(g_my_x + 0.5f - 0.52f, g_my_y + 0.5f - 0.52f);
+        win.draw(sel);
+    }
+    if (g_tex.ok) draw_spr(g_tex.player_me, (float)g_my_x, (float)g_my_y);
+    else          draw_rect((float)g_my_x, (float)g_my_y, sf::Color(70, 115, 255));
     draw_hp_bar(win, (float)g_my_x, (float)g_my_y, g_my_hp, g_my_max_hp);
 
-    // ── 공격/스킬 이펙트 (게임 뷰, 오브젝트 위에 오버레이) ──────
+    // ── 공격/스킬 이펙트 ──────────────────────────────────────────
     if (g_effect.type != EffectType::NONE) {
-        auto now_ef = std::chrono::steady_clock::now();
-        int eff_ms  = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
-            now_ef - g_effect.start).count();
-        int duration = (g_effect.type == EffectType::SKILL) ? 200 : 150;
+        using ms = std::chrono::milliseconds;
+        int eff_ms = (int)std::chrono::duration_cast<ms>(
+            std::chrono::steady_clock::now() - g_effect.start).count();
+        int dur = (g_effect.type == EffectType::SKILL) ? 350 : 220;
 
-        if (eff_ms < duration) {
-            float t     = 1.f - (float)eff_ms / duration;  // 1→0 페이드
-            auto alpha  = (sf::Uint8)(220 * t);
-
-            sf::RectangleShape eff_tile(sf::Vector2f(0.92f, 0.92f));
+        if (eff_ms < dur) {
+            float t = 1.f - (float)eff_ms / dur;   // 1→0 페이드
+            sf::Uint8 a = (sf::Uint8)(255 * t);
 
             if (g_effect.type == EffectType::ATTACK) {
-                // 상하좌우 4칸 — 주황
-                eff_tile.setFillColor(sf::Color(255, 140, 0, alpha));
+                // 4방향 플래시 타일
+                sf::RectangleShape flash(sf::Vector2f(0.92f, 0.92f));
+                flash.setFillColor(sf::Color(255, 220, 60, (sf::Uint8)(160 * t)));
+                flash.setOutlineColor(sf::Color(255, 120, 0, a));
+                flash.setOutlineThickness(0.05f);
                 const int dirs[4][2] = {{0,-1},{0,1},{-1,0},{1,0}};
                 for (auto& d : dirs) {
-                    eff_tile.setPosition(g_my_x + d[0] + 0.04f, g_my_y + d[1] + 0.04f);
-                    win.draw(eff_tile);
+                    flash.setPosition(g_my_x + d[0] + 0.04f, g_my_y + d[1] + 0.04f);
+                    win.draw(flash);
                 }
-            } else {
-                // 3x3 전체 (자기 포함) — 보라
-                eff_tile.setFillColor(sf::Color(160, 60, 255, alpha));
-                for (int dy = -1; dy <= 1; ++dy)
-                    for (int dx = -1; dx <= 1; ++dx) {
-                        eff_tile.setPosition(g_my_x + dx + 0.04f, g_my_y + dy + 0.04f);
-                        win.draw(eff_tile);
-                    }
+                // 십자 슬래시 선 (가로 / 세로)
+                sf::RectangleShape slash(sf::Vector2f(3.1f, 0.10f));
+                slash.setFillColor(sf::Color(255, 255, 220, a));
+                slash.setOrigin(1.55f, 0.05f);
+                slash.setPosition(g_my_x + 0.5f, g_my_y + 0.5f);
+                win.draw(slash);
+                slash.setSize(sf::Vector2f(0.10f, 3.1f));
+                slash.setOrigin(0.05f, 1.55f);
+                win.draw(slash);
+
+            } else { // SKILL
+                float expand = (float)eff_ms / dur;   // 0→1 팽창
+
+                // 바닥 보라 플래시 (3x3)
+                sf::RectangleShape area(sf::Vector2f(3.f, 3.f));
+                area.setFillColor(sf::Color(120, 30, 220, (sf::Uint8)(80 * t)));
+                area.setPosition(g_my_x - 1.f, g_my_y - 1.f);
+                win.draw(area);
+
+                // 팽창하는 외곽 링 (크게)
+                float r1 = 0.4f + expand * 2.2f;
+                sf::CircleShape ring1(r1);
+                ring1.setFillColor(sf::Color::Transparent);
+                ring1.setOutlineColor(sf::Color(200, 80, 255, a));
+                ring1.setOutlineThickness(0.12f);
+                ring1.setPosition(g_my_x + 0.5f - r1, g_my_y + 0.5f - r1);
+                win.draw(ring1);
+
+                // 빠르게 팽창하는 내부 링 (작게)
+                float r2 = 0.2f + expand * 1.4f;
+                sf::CircleShape ring2(r2);
+                ring2.setFillColor(sf::Color::Transparent);
+                ring2.setOutlineColor(sf::Color(240, 160, 255, (sf::Uint8)(a * 0.7f)));
+                ring2.setOutlineThickness(0.08f);
+                ring2.setPosition(g_my_x + 0.5f - r2, g_my_y + 0.5f - r2);
+                win.draw(ring2);
+
+                // 중앙 섬광
+                sf::CircleShape flash(0.3f * t);
+                flash.setFillColor(sf::Color(220, 160, 255, (sf::Uint8)(200 * t)));
+                flash.setPosition(g_my_x + 0.5f - 0.3f * t, g_my_y + 0.5f - 0.3f * t);
+                win.draw(flash);
             }
         } else {
             g_effect.type = EffectType::NONE;
@@ -1066,6 +1174,31 @@ int main()
         sf::Style::Titlebar | sf::Style::Close
     );
     window.setFramerateLimit(60);
+
+    // 스프라이트 텍스처 로드 (CC0 · Kenney Tiny Dungeon)
+    {
+        const std::string BASE = "assets/sprites/";
+        g_tex.ok =
+            g_tex.floor.loadFromFile(BASE + "floor.png")        &&
+            g_tex.wall.loadFromFile(BASE + "wall.png")          &&
+            g_tex.player_me.loadFromFile(BASE + "player_me.png")    &&
+            g_tex.player_other.loadFromFile(BASE + "player_other.png") &&
+            g_tex.npc_peace.loadFromFile(BASE + "npc_peace.png")    &&
+            g_tex.npc_agro.loadFromFile(BASE + "npc_agro.png")      &&
+            g_tex.npc_boss.loadFromFile(BASE + "npc_boss.png")      &&
+            g_tex.npc_boss_p3.loadFromFile(BASE + "npc_boss_p3.png") &&
+            g_tex.item_potion.loadFromFile(BASE + "item_potion.png");
+        // 픽셀아트 — 확대 시 최근접 필터 유지
+        g_tex.floor.setSmooth(false);  g_tex.floor.setRepeated(true);
+        g_tex.wall.setSmooth(false);   g_tex.wall.setRepeated(true);
+        g_tex.player_me.setSmooth(false);
+        g_tex.player_other.setSmooth(false);
+        g_tex.npc_peace.setSmooth(false);
+        g_tex.npc_agro.setSmooth(false);
+        g_tex.npc_boss.setSmooth(false);
+        g_tex.npc_boss_p3.setSmooth(false);
+        g_tex.item_potion.setSmooth(false);
+    }
 
     while (window.isOpen())
     {

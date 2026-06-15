@@ -341,7 +341,9 @@ bool SESSION::process_packet(unsigned char* p)
         strncpy_s(m_username, packet->username, MAX_NAME_LEN - 1);
 
         if (strncmp(m_username, "bot_", 4) == 0) {
-            // 스트레스 테스트 봇: DB 스킵, 기본값으로 즉시 게임 진입
+            // 스트레스 테스트 봇: DB 스킵, 월드 전역 랜덤 위치에 분산 배치
+            m_x = static_cast<short>(rand() % WORLD_WIDTH);
+            m_y = static_cast<short>(rand() % WORLD_HEIGHT);
             m_state = CS_PLAYING;
             sector_manager.add_object_to_sector(m_id, m_x, m_y);
             send_login_success();

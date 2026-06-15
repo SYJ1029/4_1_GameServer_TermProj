@@ -354,8 +354,7 @@ void process_npc_move(int npc_id)
             }
         }
     } else {
-        // Agro는 감지 거리(AGRO_DETECT_RANGE=10)까지 유지; Peace는 VIEW_RANGE=5
-        int deact_range = (npc->m_npc_type == NPC_AGRO_TYPE) ? AGRO_DETECT_RANGE : VIEW_RANGE;
+        int deact_range = VIEW_RANGE;
         for (int id : sector_manager.get_objects_in_adjacent_sectors(npc->m_x, npc->m_y)) {
             if (!is_pc(id)) continue;
             auto pobj = get_object(id);
